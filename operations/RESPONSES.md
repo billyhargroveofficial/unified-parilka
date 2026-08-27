@@ -17,7 +17,8 @@ proves a new release live.
 `parilka-bot.service` is the sole Bot API poller. The TypeScript process calls
 the Codex subscription Responses endpoint directly with hard-pinned
 `gpt-5.6-luna`; the Fast product policy is sent as wire
-`service_tier: "priority"`. No Hermes gateway, SearXNG, Firecrawl or model
+`service_tier: "priority"`, and interactive turns use code-owned
+`reasoning.effort: "max"`. No Hermes gateway, SearXNG, Firecrawl or model
 subprocess participates.
 
 The subscription SSE currently labels some accepted `priority` completions as
@@ -36,10 +37,30 @@ Every bot request contains hosted `web_search`; hosted search/open-page/
 find-in-page occurs in that same server-side Responses request. An explicit
 user request to check or use web/search/fetch deterministically requires only
 `web_search` on the first leg; ordinary conversation leaves search available
-without forcing it, and function continuations never force a second search.
+without forcing it. A narrow explicit deep-research request instead activates
+a host-controlled budget: the host suppresses an early draft, replays its
+provider output plus encrypted reasoning, and requires hosted web again toward
+four unique successful calls, with at most four required research legs under
+the same turn timeout. Four streamed completed actions trigger an immediate
+handoff to a direct tool-free Luna/max synthesis leg, reserving part of the
+logical timeout for a final answer instead of allowing an unnecessary fifth
+web action to stall the turn. If three strict completed evidence actions are
+already available, a slow, failed or redundant fourth attempt is cut off after
+a bounded 20-second grace and the finalizer must expose material uncertainty; below three
+completed actions the host refuses publication. Hard model/tool timeouts are
+terminal and do not replay a second visible attempt.
+Production subscription SSE exposes granular action items, so the host can cut
+at that boundary. A terminal-only adapter can only report already-completed
+extras and must keep their Telegram tool count truthful.
+This bound exists in the TypeScript loop
+because the provider's `max_tool_calls` field is only a ceiling and the direct
+subscription transport does not send Platform-only caps. Generic detailed
+questions remain single-pass.
 The host accumulates each safe lifecycle as its own short English row in one
 temporary Telegram progress message and turns valid web citations into final
-clickable links. Search text and URL host/path may be shown value-only, without
+clickable links. If subscription synthesis omits final annotations, completed
+web evidence supplies a bounded HTTPS-only fallback footer; opaque internal
+citation placeholders never reach Telegram. Search text and URL host/path may be shown value-only, without
 argument-key prefixes; URL credentials/query/hash, arbitrary arguments, raw
 tool output and model reasoning are never displayed.
 
@@ -50,7 +71,7 @@ carried between Telegram turns; durable chat context comes from the local
 causal RAG packet instead.
 
 The final rich reply has a host-only italic status footer. It reports pinned
-Luna/Fast, actual final-leg input tokens against the 272k Luna context window,
+Luna/Fast/max effort, actual final-leg input tokens against the 272k Luna context window,
 hosted-web plus local tool-call count, whole-run wall-clock duration, and the
 weekly subscription window only when `GET /backend-api/wham/usage`
 returns it for the same OAuth account. This best-effort request starts in
@@ -69,6 +90,10 @@ reported zero cached input tokens because their 23-token prompts were below a
 meaningful cacheable prefix, so the field is a routing hint rather than a
 promise of a cache hit. Do not add cache TTL fields: they remain unverified on
 the subscription endpoint, which has rejected other Platform-only fields.
+The optional research instruction is appended after the unchanged ordinary-chat
+prefix, and its tool-free finalizer keeps the same key deliberately: the key is
+a routing partition, while exact request-prefix matching prevents a divergent
+tool tail from being mistaken for an ordinary-chat cache hit.
 
 The model sees one validated Telegram `input_image` when present and exactly
 six host functions: `rag_bm25_search`, `keyword_search`, `read_chat_slice`,

@@ -7,8 +7,14 @@ import {
 import { randomUUID } from "node:crypto";
 import type { CausalRagContextBuilder } from "../bot/causal-rag/index.js";
 import type { BotMediaTools } from "../bot/media-tools.js";
-import { PARILKA_RESPONSES_INSTRUCTIONS } from "../bot/responses/instructions.js";
-import { requiresHostedWebSearchFirstLeg } from "../bot/responses/web-intent.js";
+import {
+  PARILKA_BOUNDED_RESEARCH_INSTRUCTIONS,
+  PARILKA_RESPONSES_INSTRUCTIONS,
+} from "../bot/responses/instructions.js";
+import {
+  requiresBoundedHostedWebResearch,
+  requiresHostedWebSearchFirstLeg,
+} from "../bot/responses/web-intent.js";
 import { normalizeResponsesFinalText } from "../bot/responses/final-text.js";
 import {
   renderTelegramCausalAttributions,
@@ -129,6 +135,7 @@ export class ResponsesBotTurnAgent implements BotTurnAgent {
         imageStarted = true;
         progress.startImage({ itemId: "telegram-input-image", kind: "view" });
       }
+      const boundedResearch = requiresBoundedHostedWebResearch(request.trigger.text);
       const result = await this.#responses.run({
         text: renderTrustedUserInput(
           request,
@@ -136,8 +143,10 @@ export class ResponsesBotTurnAgent implements BotTurnAgent {
           this.#now(),
           requireNonce(this.#nonceFactory()),
         ),
-        instructions: PARILKA_RESPONSES_INSTRUCTIONS,
-        effort: "low",
+        instructions: boundedResearch
+          ? `${PARILKA_RESPONSES_INSTRUCTIONS}\n${PARILKA_BOUNDED_RESEARCH_INSTRUCTIONS}`
+          : PARILKA_RESPONSES_INSTRUCTIONS,
+        effort: "max",
         localFunctions: localFunctionSchemas(),
         dispatcher: {
           dispatch: (call, signal) => this.#dispatchLocalTool(call, request.turn.triggerMessageId, signal),
@@ -146,8 +155,10 @@ export class ResponsesBotTurnAgent implements BotTurnAgent {
         signal: request.signal,
         timeoutMs: this.#turnTimeoutMs,
         maxOutputTokens: 4_096,
-        ...(requiresHostedWebSearchFirstLeg(request.trigger.text)
-          ? { hostedWebSearchPolicy: "required_first_leg" as const }
+        ...(boundedResearch
+          ? { hostedWebSearchPolicy: "bounded_research" as const }
+          : requiresHostedWebSearchFirstLeg(request.trigger.text)
+            ? { hostedWebSearchPolicy: "required_first_leg" as const }
           : {}),
         progress: { onProgress: (event) => forwardProgress(progress, event) },
       });
@@ -157,6 +168,7 @@ export class ResponsesBotTurnAgent implements BotTurnAgent {
         type: "url_citation" as const, url: annotation.url, title: annotation.title,
       })), finalText)}`;
       const usage = await immediatelyAvailable(usagePromise);
+      const telemetryUsage = result.aggregateUsage ?? result.usage;
       const toolCalls = result.functionCalls + result.hostedWebCalls;
       const durationMs = Math.max(0, Date.now() - startedAtMs);
       const text = `${visible}${renderResponsesStatusFooter({
@@ -176,17 +188,19 @@ export class ResponsesBotTurnAgent implements BotTurnAgent {
           serviceTier: result.serviceTier,
           steps: [{
             modelId: result.model,
-            ...(result.usage === undefined ? {} : {
-              inputTokens: result.usage.inputTokens,
-              outputTokens: result.usage.outputTokens,
-              totalTokens: result.usage.totalTokens,
-              reasoningTokens: result.usage.reasoningOutputTokens,
+            ...(telemetryUsage === undefined ? {} : {
+              inputTokens: telemetryUsage.inputTokens,
+              outputTokens: telemetryUsage.outputTokens,
+              totalTokens: telemetryUsage.totalTokens,
+              reasoningTokens: telemetryUsage.reasoningOutputTokens,
             }),
           }],
+          ...(telemetryUsage === undefined ? {} : {
+            totalInputTokens: telemetryUsage.inputTokens,
+            totalOutputTokens: telemetryUsage.outputTokens,
+            totalTokens: telemetryUsage.totalTokens,
+          }),
           ...(result.usage === undefined ? {} : {
-            totalInputTokens: result.usage.inputTokens,
-            totalOutputTokens: result.usage.outputTokens,
-            totalTokens: result.usage.totalTokens,
             contextUsedTokens: result.usage.inputTokens,
           }),
           toolCalls,

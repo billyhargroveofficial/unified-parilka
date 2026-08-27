@@ -17,6 +17,27 @@ test("shadow worker never invokes publisher", async (t) => {
   assert.equal(result.status, "skipped"); assert.equal(calls, 0);
 });
 
+test("an explicitly non-retryable agent timeout dead-letters the turn after one visible attempt", async (t) => {
+  const fixture = makeFixture(t);
+  let calls = 0;
+  const timeout = Object.assign(new Error("model timed out"), {
+    name: "ResponsesTurnTimeoutError",
+    retryable: false,
+  });
+  const worker = fixture.worker({
+    agent: async () => { calls += 1; throw timeout; },
+    publisher: async () => { assert.fail("timeout must not publish"); },
+  });
+
+  assert.deepEqual(await worker.runOnce(), {
+    status: "failed", turnId: fixture.turnId, stage: "agent",
+  });
+  assert.equal(fixture.store.getBotTurn(fixture.turnId)?.status, "dead_letter");
+  assert.equal(fixture.store.getBotTurn(fixture.turnId)?.attempts, 1);
+  assert.equal((await worker.runOnce()).status, "idle");
+  assert.equal(calls, 1);
+});
+
 test("a rejected stale-progress delete cannot block final turn delivery", async (t) => {
   const fixture = makeFixture(t);
   const prior = fixture.store.claimNextBotTurn({

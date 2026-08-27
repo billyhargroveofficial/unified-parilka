@@ -9,13 +9,13 @@ import {
 } from "../bot/responses/runtime-config.js";
 import { createLogger } from "../observability/logger.js";
 
-const MODEL_ACCESS_TIMEOUT_MS = 10_000;
+const MODEL_ACCESS_TIMEOUT_MS = 30_000;
 
 export interface BotResponsesPreflightRequest {
   readonly model: "gpt-5.6-luna";
   /** Codex subscription wire value for logical Fast. */
   readonly service_tier: "priority";
-  readonly reasoning: Readonly<{ effort: "low" }>;
+  readonly reasoning: Readonly<{ effort: "max" }>;
   readonly store: false;
   readonly stream: true;
   readonly input: readonly [Readonly<{
@@ -119,7 +119,7 @@ function preflightRequest(config: BotResponsesRuntimeConfig): BotResponsesPrefli
   return {
     model: config.model,
     service_tier: "priority",
-    reasoning: { effort: "low" },
+    reasoning: { effort: "max" },
     store: false,
     stream: true,
     input: [{

@@ -15,7 +15,10 @@ export const OPENAI_RESPONSES_SERVICE_TIER = "fast" as const;
 export const OPENAI_RESPONSES_SUBSCRIPTION_SERVICE_TIER = "priority" as const;
 /**
  * A code-owned, non-PII cache partition for the stable Responses prompt
- * prefix. Bump this only when the shared prompt/tool contract changes.
+ * prefix. Bump this only when the shared prompt/tool contract changes. A
+ * research-only suffix and its tool-free finalizer intentionally keep this
+ * partition: exact provider prefix matching still separates divergent tails
+ * while preserving the longest common cacheable prefix.
  */
 export const OPENAI_RESPONSES_PROMPT_CACHE_KEY = "parilka:responses:v2" as const;
 /** The subscription transport normalizes successful Fast completions to this exact value. */
@@ -34,11 +37,12 @@ export type ResponsesReasoningEffort =
   | "max";
 
 /**
- * Hosted web is registered for every interactive bot request.  A narrow,
- * explicit user request may require it on the initial model leg; continuations
- * always return to the ordinary tool policy after that first hosted call.
+ * Hosted web is registered for every interactive bot request. A narrow,
+ * explicit user request may require it on the initial model leg. Explicit
+ * research intent may additionally use a bounded host-controlled continuation
+ * loop so the model cannot publish after only one shallow search pass.
  */
-export type HostedWebSearchPolicy = "available" | "required_first_leg";
+export type HostedWebSearchPolicy = "available" | "required_first_leg" | "bounded_research";
 
 /**
  * Deliberately no catch-all tool surface: callers provide exactly these schemas.
@@ -140,7 +144,7 @@ export interface RunResponsesTurnRequest {
   readonly image?: ResponsesImageInput;
   /** Hosted web search remains enabled unless an isolated maintenance job opts out. */
   readonly hostedWebSearch?: boolean;
-  /** Requires hosted web_search, and only on the first leg of this one turn. */
+  /** Optional first-leg or bounded multi-leg hosted-web policy for this turn. */
   readonly hostedWebSearchPolicy?: HostedWebSearchPolicy;
   readonly maxOutputTokens?: number;
   readonly textJsonSchema?: ResponsesTextJsonSchema;
@@ -161,7 +165,10 @@ export interface RunResponsesTurnResult {
   readonly model: typeof OPENAI_RESPONSES_MODEL;
   readonly text: string;
   readonly annotations: readonly ResponsesCitation[];
+  /** Final-leg usage: its inputTokens is the actual current context footprint. */
   readonly usage?: ResponsesUsage;
+  /** Sum of every stateless leg when all provider usage records were present. */
+  readonly aggregateUsage?: ResponsesUsage;
   /** The validated provider-reported effective tier for this completed turn. */
   readonly serviceTier: EffectiveResponsesServiceTier;
   readonly functionCalls: number;
@@ -191,7 +198,7 @@ export interface ResponsesCreateRequest {
   readonly include:
     | readonly ["reasoning.encrypted_content"]
     | readonly ["reasoning.encrypted_content", "web_search_call.action.sources"];
-  /** First-leg deterministic hosted search, deliberately absent on continuations. */
+  /** Host-selected deterministic hosted search for this particular leg. */
   readonly tool_choice?: Readonly<{
     type: "allowed_tools";
     mode: "required";
@@ -212,15 +219,21 @@ export interface ResponsesStreamTransport {
 }
 
 export class ResponsesTurnError extends Error {
-  constructor(message: string) {
+  readonly retryable: boolean;
+
+  constructor(message: string, options: { retryable?: boolean } = {}) {
     super(message);
     this.name = "ResponsesTurnError";
+    this.retryable = options.retryable ?? true;
   }
 }
 
 export class ResponsesTurnTimeoutError extends ResponsesTurnError {
   constructor(timeoutMs: number) {
-    super(`Responses turn exceeded its ${timeoutMs}ms timeout.`);
+    // Replaying a full visible Telegram turn after a model/tool timeout creates
+    // duplicate thinking/tool bubbles and usually repeats the same upstream
+    // stall. A fresh user request remains possible, but this turn is terminal.
+    super(`Responses turn exceeded its ${timeoutMs}ms timeout.`, { retryable: false });
     this.name = "ResponsesTurnTimeoutError";
   }
 }

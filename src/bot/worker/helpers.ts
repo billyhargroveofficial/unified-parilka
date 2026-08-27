@@ -116,6 +116,12 @@ export function safeErrorCode(error: unknown): string {
   return "unknown_error";
 }
 
+/** Agent errors retry by default; an explicit false is a terminal contract. */
+export function isRetryableAgentError(error: unknown): boolean {
+  return !(error != null && typeof error === "object" &&
+    (error as { retryable?: unknown }).retryable === false);
+}
+
 export function safeMachineCode(value: string, fallback: string): string {
   return /^[A-Z0-9_]{1,64}$/u.test(value) ? value : fallback;
 }

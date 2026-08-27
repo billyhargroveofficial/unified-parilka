@@ -280,37 +280,51 @@ declare protected getBotUpdateLocked: (
     return this.finishClaimedBotTurn(turnId, workerId, "skipped", reason, nowMs);
   }
 
-  markBotTurnFailed(turnId: number, workerId: string, error: string, nowMs = Date.now()): boolean {
+  markBotTurnFailed(
+    turnId: number,
+    workerId: string,
+    error: string,
+    nowMs = Date.now(),
+    retryable = true,
+  ): boolean {
     assertBotTurnId(turnId);
     assertTimestamp(nowMs, "nowMs");
     const owner = workerId.trim();
     if (!owner) {
       throw new Error("workerId must not be empty.");
     }
+    if (typeof retryable !== "boolean") {
+      throw new TypeError("retryable must be a boolean.");
+    }
     return this.immediateTransaction("markBotTurnFailed", () => {
       const current = this.getBotTurnLocked(turnId);
       const retryNotBeforeMs =
-        current != null && current.attempts < current.maxAttempts
+        retryable && current != null && current.attempts < current.maxAttempts
           ? nowMs + botTurnRetryDelayMs(current.attempts)
           : null;
       const result = this.db
         .prepare(
           `UPDATE bot_turns
-           SET status = CASE WHEN attempts >= max_attempts THEN 'dead_letter' ELSE 'failed' END,
-               error = ?, lease_owner = NULL, lease_expires_at_ms = NULL,
-               retry_not_before_ms = CASE
-                 WHEN attempts >= max_attempts THEN NULL
-                 ELSE ?
+           SET status = CASE
+                 WHEN ? = 1 AND attempts < max_attempts THEN 'failed'
+                 ELSE 'dead_letter'
                END,
+               error = ?, lease_owner = NULL, lease_expires_at_ms = NULL,
+               retry_not_before_ms = ?,
                updated_at_ms = ?,
-               completed_at_ms = CASE WHEN attempts >= max_attempts THEN ? ELSE NULL END
+               completed_at_ms = CASE
+                 WHEN ? = 1 AND attempts < max_attempts THEN NULL
+                 ELSE ?
+               END
            WHERE id = ? AND status IN ('running', 'drafted') AND lease_owner = ?
              AND lease_expires_at_ms > ?`,
         )
         .run(
+          retryable ? 1 : 0,
           error.trim() || "Bot turn failed.",
           retryNotBeforeMs,
           nowMs,
+          retryable ? 1 : 0,
           nowMs,
           turnId,
           owner,

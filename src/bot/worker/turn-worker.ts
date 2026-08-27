@@ -26,6 +26,7 @@ import {
 } from "./contracts.js";
 import { dispatchBotTurn, markBotTurnLostAck } from "./dispatch.js";
 import {
+  isRetryableAgentError,
   isAgentFinal,
   safeErrorCode,
 } from "./helpers.js";
@@ -275,6 +276,7 @@ export class BotTurnWorker {
               turn,
               "agent",
               safeErrorCode(error),
+              isRetryableAgentError(error),
             )
           ) {
             return { status: "lease_lost", turnId: turn.id };
@@ -423,6 +425,7 @@ export class BotTurnWorker {
     turn: StoredBotTurn,
     stage: "load" | "agent" | "coordinator",
     code: string,
+    retryable = true,
   ): boolean {
     let transitioned = false;
     try {
@@ -431,6 +434,7 @@ export class BotTurnWorker {
         this.#workerId,
         `${stage}:${code}`,
         this.#now(),
+        retryable,
       );
     } finally {
       this.#log("error", "bot.turn.failed", {

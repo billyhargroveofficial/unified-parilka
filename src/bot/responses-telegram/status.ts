@@ -16,7 +16,7 @@ export interface ResponsesStatusFooter {
 export function renderResponsesStatusFooter(input: ResponsesStatusFooter): string {
   const context = input.inputTokens === undefined ? "?" : compactTokens(input.inputTokens);
   const usage = renderWeeklyUsage(selectWeeklyWindow(input.usage), input.nowMs ?? Date.now());
-  return `\n\n*GPT-5.6 Luna Fast · ctx ${context}/${compactTokens(LUNA_CONTEXT_WINDOW_TOKENS)} · tools ${compactCount(input.toolCalls)} · ${compactDuration(input.durationMs)} ● ${usage}*`;
+  return `\n\n*GPT-5.6 Luna Fast max · ctx ${context}/${compactTokens(LUNA_CONTEXT_WINDOW_TOKENS)} · tools ${compactCount(input.toolCalls)} · ${compactDuration(input.durationMs)} ● ${usage}*`;
 }
 
 function selectWeeklyWindow(

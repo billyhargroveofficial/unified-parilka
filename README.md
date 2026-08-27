@@ -31,14 +31,32 @@ parilka-maintain + parilka-digests -> SQLite + direct Responses maintenance loop
 ## Model and tool contract
 
 The bot hard-pins `gpt-5.6-luna` with Fast policy (`service_tier: "priority"`
-on the wire); neither model nor tier is an environment selector. Each chat
+on the wire) and `reasoning.effort: "max"`; none of these is an environment selector. Each chat
 Responses request includes the
 hosted `web_search` tool. Search, fetch and find-in-page actions happen in the
 same server-side request. One temporary Telegram message accumulates one short
 English row per tool call, with only the bounded value (query, URL host/path or
 find pattern) and no redundant argument-key prefix;
 URL credentials/query/hash, arbitrary arguments and tool output remain hidden.
-Citations in the final response are converted to a compact clickable footer.
+Citations in the final response are converted to a compact clickable footer;
+if a subscription synthesis leg omits annotations, validated HTTPS sources from
+its completed web evidence are used as the fallback, and opaque internal citation
+placeholders are removed from visible text.
+An explicit `deep dive`/`deep research`/`дип-дайв`/`глубокий ресерч` request
+enters a bounded host-controlled research loop: early drafts are retained only
+inside the same stateless turn, hosted web is required again toward a target of
+four successful unique web actions (at most four required legs). As soon as four
+streamed actions complete, the host cancels further native web work and gives
+their provider output to one direct, tool-free Luna/max synthesis leg; only that
+final answer is published. Once three strict completed evidence actions exist, a
+fourth action gets a 20-second grace period: if it stalls, fails or only repeats
+existing evidence, the host runs the same tool-free synthesis with an explicit
+uncertainty instruction. Fewer than three completed evidence actions cannot be
+published, and a hard model timeout is terminal instead of replaying progress.
+Generic requests for detail remain single-pass.
+The live subscription stream exposes each action early enough for that cutoff;
+a terminal-only adapter can only account for extra actions already completed
+before the provider exposes any action boundary.
 
 The model can receive a validated Telegram image directly as `input_image`
 (high detail). It has no shell, terminal, filesystem, Telegram write or delete
@@ -75,7 +93,7 @@ titles and counts, never skill instructions, memory text, review prompts or
 tool payloads.
 
 Every final rich reply ends with one host-rendered italic status line: pinned
-Luna/Fast, the completed leg's actual input-token count against Luna's 272k
+Luna/Fast/max effort, the completed leg's actual input-token count against Luna's 272k
 context window, hosted-web plus local tool-call count, whole-run duration and
 the subscription's weekly allowance when available. The
 quota reader uses the same OAuth identity against the Codex usage endpoint in

@@ -6,14 +6,11 @@ import type {
 } from "openai/resources/responses/responses";
 import {
   OPENAI_RESPONSES_MODEL,
-  OPENAI_RESPONSES_PROMPT_CACHE_KEY,
   OPENAI_RESPONSES_SUBSCRIPTION_SERVICE_TIER,
-  OPENAI_WEB_SEARCH_TOOL,
   type EffectiveResponsesServiceTier,
   type LocalFunctionCall,
-  type ResponsesCitation,
-  type ResponsesCreateRequest,
   type ResponsesProgressEvent,
+  type ResponsesCitation,
   type ResponsesStreamTransport,
   type ResponsesUsage,
   type ResponsesWebAction,
@@ -24,21 +21,45 @@ import {
   ResponsesTurnError,
   ResponsesTurnTimeoutError,
 } from "./contracts.js";
+import {
+  addResponsesUsage,
+  hasInsufficientBoundedResearchCoverage,
+  researchEvidencePhaseTimeoutMs,
+  researchStalledActionGraceMs,
+  researchContinuationInput,
+  researchSynthesisInput,
+  researchSynthesisRequest,
+  shouldContinueBoundedResearch,
+  shouldRequireHostedWeb,
+  shouldSynthesizeBoundedResearch,
+  MIN_SYNTHESIS_HOSTED_WEB_CALLS,
+  TARGET_SUCCESSFUL_HOSTED_WEB_CALLS,
+} from "./research-policy.js";
+import {
+  citationsFrom,
+  citationsFromWebEvidence,
+  functionCallsFrom,
+  hasHostedWebSearchCall,
+  responseOutputInput,
+  usageFrom,
+  webProgressFingerprint,
+  webSearchItem,
+} from "./response-output.js";
+import {
+  assertFunctionResult,
+  assertTurnRequest,
+  boundedFunctionCalls,
+  boundedTimeout,
+  createRequest,
+  userInput,
+} from "./request.js";
 
 const DEFAULT_TIMEOUT_MS = 180_000;
-const MIN_TIMEOUT_MS = 5_000;
-const MAX_TIMEOUT_MS = 600_000;
 const DEFAULT_MAX_FUNCTION_CALLS = 8;
-const MAX_FUNCTION_CALLS = 16;
-const MAX_FUNCTION_RESULT_CHARS = 200_000;
 /** Bound all local-function continuations within one Telegram turn. */
 const MAX_TOTAL_FUNCTION_OUTPUT_CHARS = 96_000;
 /** Never leak or partially truncate an over-budget host result into a model leg. */
 const FUNCTION_OUTPUT_BUDGET_ERROR = "Local function output omitted: Responses turn output budget exhausted.";
-const MAX_INPUT_TEXT_CHARS = 64_000;
-const MAX_INSTRUCTIONS_CHARS = 32_000;
-const MAX_IMAGE_DATA_URL_CHARS = 16 * 1024 * 1024;
-const MAX_OUTPUT_TOKENS = 128_000;
 
 /**
  * One logical Telegram turn over the stateless Codex subscription Responses
@@ -54,45 +75,143 @@ export class OpenAiResponsesTurnClient {
   }
 
   async run(request: RunResponsesTurnRequest): Promise<RunResponsesTurnResult> {
-    assertPlainText(request.text, "text", MAX_INPUT_TEXT_CHARS);
-    assertPlainText(request.instructions, "instructions", MAX_INSTRUCTIONS_CHARS);
-    assertFunctionSchemas(request.localFunctions);
-    assertTextJsonSchema(request.textJsonSchema);
-    assertHostedWebPolicy(request);
+    assertTurnRequest(request);
     const timeoutMs = boundedTimeout(request.timeoutMs ?? DEFAULT_TIMEOUT_MS);
     const maxFunctionCalls = boundedFunctionCalls(request.maxFunctionCalls ?? DEFAULT_MAX_FUNCTION_CALLS);
     const timeout = new AbortController();
     const signal = joinSignals(request.signal, timeout.signal);
     const timer = setTimeout(() => timeout.abort(), timeoutMs);
     timer.unref();
+    const evidenceTimeoutMs = request.hostedWebSearchPolicy === "bounded_research"
+      ? researchEvidencePhaseTimeoutMs(timeoutMs)
+      : undefined;
+    const stalledResearchActionGraceMs = evidenceTimeoutMs === undefined
+      ? undefined
+      : researchStalledActionGraceMs(evidenceTimeoutMs);
+    const evidenceTimeout = new AbortController();
+    let evidenceTimer = evidenceTimeoutMs === undefined
+      ? undefined
+      : setTimeout(() => evidenceTimeout.abort(), evidenceTimeoutMs);
+    evidenceTimer?.unref();
     let input = userInput(request.text, request.image);
+    let activeRequest = request;
+    let collectingResearchEvidence = evidenceTimeoutMs !== undefined;
     let firstLeg = true;
     let functionCalls = 0;
     const hostedWebCallIds = new Set<string>();
+    const successfulHostedWebEvidenceKeys = new Set<string>();
+    const evidenceCitations = new Map<string, ResponsesCitation>();
+    const rememberEvidenceCitations = (...groups: readonly (readonly ResponsesCitation[])[]): void => {
+      for (const group of groups) {
+        for (const citation of group) {
+          if (!evidenceCitations.has(citation.url) && evidenceCitations.size < 12) {
+            evidenceCitations.set(citation.url, citation);
+          }
+        }
+      }
+    };
+    let requiredResearchLegs = 0;
+    let legCount = 0;
+    let aggregateUsage: ResponsesUsage | undefined;
+    let aggregateUsageComplete = true;
     let functionOutputChars = 0;
     try {
       for (;;) {
-        const leg = await this.#runLeg({
-          request,
-          input,
+        const requireHostedWeb = shouldRequireHostedWeb({
+          request: activeRequest,
           firstLeg,
-          signal,
-          maxFunctionCalls,
+          successfulHostedWebCalls: successfulHostedWebEvidenceKeys.size,
+          requiredResearchLegs,
         });
-        const functions = functionCallsFrom(leg.response.output);
+        if (requireHostedWeb && activeRequest.hostedWebSearchPolicy === "bounded_research") {
+          requiredResearchLegs += 1;
+        }
+        const leg = await this.#runLeg({
+          request: activeRequest,
+          input,
+          requireHostedWeb,
+          signal,
+          evidenceSignal: collectingResearchEvidence ? evidenceTimeout.signal : undefined,
+          stalledResearchActionGraceMs,
+          hostedWebAttemptsBeforeLeg: hostedWebCallIds.size,
+          successfulEvidenceBeforeLeg: new Set(successfulHostedWebEvidenceKeys),
+          maxFunctionCalls,
+          captureResearchEvidence: collectingResearchEvidence,
+        });
         for (const callId of leg.hostedWebCallIds) hostedWebCallIds.add(callId);
+        for (const key of leg.successfulHostedWebEvidenceKeys) successfulHostedWebEvidenceKeys.add(key);
+        if (leg.kind === "research_evidence") {
+          rememberEvidenceCitations(citationsFromWebEvidence(leg.output));
+          if (successfulHostedWebEvidenceKeys.size < MIN_SYNTHESIS_HOSTED_WEB_CALLS) {
+            throw new ResponsesTurnError("Responses research evidence handoff fell below its strict coverage floor.");
+          }
+          aggregateUsageComplete = false;
+          if (evidenceTimer !== undefined) clearTimeout(evidenceTimer);
+          evidenceTimer = undefined;
+          collectingResearchEvidence = false;
+          input = [
+            ...input,
+            ...responseOutputInput(leg.output),
+            researchSynthesisInput(successfulHostedWebEvidenceKeys.size, hostedWebCallIds.size),
+          ];
+          activeRequest = researchSynthesisRequest(request);
+          firstLeg = false;
+          continue;
+        }
+        legCount += 1;
+        const legUsage = usageFrom(leg.response);
+        if (legUsage === undefined) {
+          aggregateUsageComplete = false;
+        } else {
+          aggregateUsage = addResponsesUsage(aggregateUsage, legUsage);
+        }
+        const functions = functionCallsFrom(leg.response.output);
+        const legCitations = citationsFrom(leg.response);
+        rememberEvidenceCitations(legCitations, citationsFromWebEvidence(leg.response.output));
         if (functions.length === 0) {
           const text = leg.response.output_text;
+          if (shouldSynthesizeBoundedResearch(
+            activeRequest,
+            successfulHostedWebEvidenceKeys.size,
+            hostedWebCallIds.size,
+          )) {
+            if (evidenceTimer !== undefined) clearTimeout(evidenceTimer);
+            evidenceTimer = undefined;
+            collectingResearchEvidence = false;
+            input = [
+              ...input,
+              ...responseOutputInput(leg.response.output),
+              researchSynthesisInput(successfulHostedWebEvidenceKeys.size, hostedWebCallIds.size),
+            ];
+            activeRequest = researchSynthesisRequest(request);
+            firstLeg = false;
+            continue;
+          }
+          if (shouldContinueBoundedResearch(activeRequest, successfulHostedWebEvidenceKeys.size, requiredResearchLegs)) {
+            input = [
+              ...input,
+              ...responseOutputInput(leg.response.output),
+              researchContinuationInput(successfulHostedWebEvidenceKeys.size),
+            ];
+            firstLeg = false;
+            continue;
+          }
+          if (hasInsufficientBoundedResearchCoverage(activeRequest, successfulHostedWebEvidenceKeys.size, requiredResearchLegs)) {
+            throw new ResponsesTurnError("Responses bounded research exhausted before sufficient hosted-web coverage.");
+          }
           if (text.length === 0) throw new ResponsesTurnError("Responses completed without final text.");
           return {
             responseId: leg.response.id,
             model: leg.model,
             text,
-            annotations: citationsFrom(leg.response),
+            annotations: legCitations.length > 0 ? legCitations : [...evidenceCitations.values()],
             functionCalls,
             completed: true,
             finishStatus: "completed",
-            ...(usageFrom(leg.response) === undefined ? {} : { usage: usageFrom(leg.response) }),
+            ...(legUsage === undefined ? {} : { usage: legUsage }),
+            ...(legCount > 1 && aggregateUsageComplete && aggregateUsage !== undefined
+              ? { aggregateUsage }
+              : {}),
             serviceTier: leg.serviceTier,
             hostedWebCalls: hostedWebCallIds.size,
           };
@@ -104,7 +223,7 @@ export class OpenAiResponsesTurnClient {
         }
         const dispatched = await this.#dispatchFunctions(
           functions,
-          request,
+          activeRequest,
           signal,
           MAX_TOTAL_FUNCTION_OUTPUT_CHARS - functionOutputChars,
           maxFunctionCalls - callsAlreadyDispatched,
@@ -120,24 +239,46 @@ export class OpenAiResponsesTurnClient {
     } catch (error) {
       if (timeout.signal.aborted) throw new ResponsesTurnTimeoutError(timeoutMs);
       if (request.signal?.aborted) throw new ResponsesTurnCancelledError();
+      if (collectingResearchEvidence && evidenceTimeout.signal.aborted && evidenceTimeoutMs !== undefined) {
+        throw new ResponsesTurnTimeoutError(evidenceTimeoutMs);
+      }
       throw error;
     } finally {
       clearTimeout(timer);
+      if (evidenceTimer !== undefined) clearTimeout(evidenceTimer);
     }
   }
 
   async #runLeg(options: {
     request: RunResponsesTurnRequest;
     input: readonly Record<string, unknown>[];
-    firstLeg: boolean;
+    requireHostedWeb: boolean;
     signal: AbortSignal;
+    evidenceSignal?: AbortSignal;
+    stalledResearchActionGraceMs?: number;
+    hostedWebAttemptsBeforeLeg: number;
+    successfulEvidenceBeforeLeg: ReadonlySet<string>;
     maxFunctionCalls: number;
+    captureResearchEvidence: boolean;
   }): Promise<{
+    kind: "completed";
     response: Response;
     model: typeof OPENAI_RESPONSES_MODEL;
     serviceTier: EffectiveResponsesServiceTier;
     hostedWebCallIds: readonly string[];
+    successfulHostedWebEvidenceKeys: readonly string[];
+  } | {
+    kind: "research_evidence";
+    output: readonly ResponseOutputItem[];
+    hostedWebCallIds: readonly string[];
+    successfulHostedWebEvidenceKeys: readonly string[];
   }> {
+    const legAbort = new AbortController();
+    const legSignal = AbortSignal.any([
+      options.signal,
+      legAbort.signal,
+      ...(options.evidenceSignal === undefined ? [] : [options.evidenceSignal]),
+    ]);
     const thinkingCallId = `thinking:${crypto.randomUUID()}`;
     // This is deliberately before the awaited HTTP create: Telegram gets an
     // immediate status even while the upstream connection is being established.
@@ -146,7 +287,45 @@ export class OpenAiResponsesTurnClient {
     const activeWebSearches = new Set<string>();
     const startedWebSearches = new Set<string>();
     const completedWebSearches = new Set<string>();
+    const strictSuccessfulWebEvidenceKeys = new Set<string>();
+    const totalSuccessfulWebEvidenceKeys = new Set(options.successfulEvidenceBeforeLeg);
+    const capturedOutput: ResponseOutputItem[] = [];
     const announcedWebDetails = new Map<string, string>();
+    let stalledResearchActionDeadlineReached = false;
+    let guardedResearchCallId: string | undefined;
+    let stalledResearchActionTimer: ReturnType<typeof setTimeout> | undefined;
+    const researchEvidence = (): {
+      kind: "research_evidence";
+      output: readonly ResponseOutputItem[];
+      hostedWebCallIds: readonly string[];
+      successfulHostedWebEvidenceKeys: readonly string[];
+    } => ({
+      kind: "research_evidence",
+      output: capturedOutput,
+      hostedWebCallIds: [...startedWebSearches],
+      successfulHostedWebEvidenceKeys: [...strictSuccessfulWebEvidenceKeys],
+    });
+    const clearGuardedResearchAction = (callId: string): void => {
+      if (guardedResearchCallId !== callId || stalledResearchActionTimer === undefined) return;
+      clearTimeout(stalledResearchActionTimer);
+      stalledResearchActionTimer = undefined;
+      guardedResearchCallId = undefined;
+    };
+    const maybeArmStalledResearchAction = (): void => {
+      if (!options.captureResearchEvidence || options.stalledResearchActionGraceMs === undefined ||
+        stalledResearchActionTimer !== undefined ||
+        totalSuccessfulWebEvidenceKeys.size < MIN_SYNTHESIS_HOSTED_WEB_CALLS ||
+        options.hostedWebAttemptsBeforeLeg + startedWebSearches.size <
+          TARGET_SUCCESSFUL_HOSTED_WEB_CALLS) return;
+      const activeCallId = activeWebSearches.values().next().value as string | undefined;
+      if (activeCallId === undefined) return;
+      guardedResearchCallId = activeCallId;
+      stalledResearchActionTimer = setTimeout(() => {
+        stalledResearchActionDeadlineReached = true;
+        legAbort.abort();
+      }, options.stalledResearchActionGraceMs);
+      stalledResearchActionTimer.unref();
+    };
     const completeThinking = async (ok: boolean): Promise<void> => {
       if (!thinking) return;
       thinking = false;
@@ -198,6 +377,7 @@ export class OpenAiResponsesTurnClient {
           });
         }
       }
+      maybeArmStalledResearchAction();
     };
     const completeWebSearch = async (callId: string, ok: boolean): Promise<void> => {
       if (completedWebSearches.has(callId)) return;
@@ -212,10 +392,10 @@ export class OpenAiResponsesTurnClient {
         createRequest(
           options.request,
           options.input,
-          options.firstLeg,
+          options.requireHostedWeb,
           options.maxFunctionCalls,
         ),
-        { signal: options.signal },
+        { signal: legSignal },
       );
       let completed: Response | undefined;
       let completedAdmission: {
@@ -224,7 +404,7 @@ export class OpenAiResponsesTurnClient {
       } | undefined;
       iterator = stream[Symbol.asyncIterator]();
       for (;;) {
-        const next = await nextWithAbort(iterator, options.signal);
+        const next = await nextWithAbort(iterator, legSignal);
         if (next.done) break;
         const event = next.value;
         if (event.type === "response.web_search_call.in_progress" || event.type === "response.web_search_call.searching") {
@@ -234,11 +414,42 @@ export class OpenAiResponsesTurnClient {
           await completeWebSearch(event.item_id, true);
         } else if (event.type === "response.output_item.added" || event.type === "response.output_item.done") {
           const web = webSearchItem(event.item);
+          if (event.type === "response.output_item.done" && options.captureResearchEvidence &&
+            web === undefined && event.item.type === "reasoning") {
+            capturedOutput.push(event.item);
+          }
           if (web !== undefined) {
             await completeThinking(true);
             await startWebSearch(web.callId, web.action, web.input, web.ok);
             if (event.type === "response.output_item.done") {
               await completeWebSearch(web.callId, web.ok);
+              if (web.ok) {
+                const evidenceKey = webProgressFingerprint(web.action ?? "search", web.input);
+                strictSuccessfulWebEvidenceKeys.add(evidenceKey);
+                totalSuccessfulWebEvidenceKeys.add(evidenceKey);
+                if (options.captureResearchEvidence) capturedOutput.push(event.item);
+                clearGuardedResearchAction(web.callId);
+                if (options.captureResearchEvidence &&
+                  totalSuccessfulWebEvidenceKeys.size >= TARGET_SUCCESSFUL_HOSTED_WEB_CALLS) {
+                  legAbort.abort();
+                  for (const activeCallId of [...activeWebSearches]) {
+                    await completeWebSearch(activeCallId, false);
+                  }
+                  return researchEvidence();
+                }
+              }
+              if (options.captureResearchEvidence && !web.ok) clearGuardedResearchAction(web.callId);
+              if (options.captureResearchEvidence &&
+                options.hostedWebAttemptsBeforeLeg + startedWebSearches.size >=
+                  TARGET_SUCCESSFUL_HOSTED_WEB_CALLS &&
+                totalSuccessfulWebEvidenceKeys.size >= MIN_SYNTHESIS_HOSTED_WEB_CALLS) {
+                legAbort.abort();
+                for (const activeCallId of [...activeWebSearches]) {
+                  await completeWebSearch(activeCallId, false);
+                }
+                return researchEvidence();
+              }
+              maybeArmStalledResearchAction();
             }
           }
         } else if (event.type === "response.completed") {
@@ -246,9 +457,8 @@ export class OpenAiResponsesTurnClient {
           // reject a substituted model or a degraded effective tier before any
           // response from this leg can seed a local-function continuation.
           completedAdmission = assertCompletedResponseAdmission(event.response);
-          if (options.firstLeg && options.request.hostedWebSearchPolicy === "required_first_leg" &&
-            !hasHostedWebSearchCall(event.response.output)) {
-            throw new ResponsesTurnError("Responses required hosted web_search on the first leg but did not return a web call.");
+          if (options.requireHostedWeb && !hasHostedWebSearchCall(event.response.output)) {
+            throw new ResponsesTurnError("Responses required hosted web_search on this leg but did not return a web call.");
           }
           completed = event.response;
           // Some transports omit granular web stream events. The terminal
@@ -260,6 +470,11 @@ export class OpenAiResponsesTurnClient {
             if (web === undefined) continue;
             await startWebSearch(web.callId, web.action, web.input, web.ok);
             await completeWebSearch(web.callId, web.ok);
+            if (web.ok) {
+              const evidenceKey = webProgressFingerprint(web.action ?? "search", web.input);
+              strictSuccessfulWebEvidenceKeys.add(evidenceKey);
+              totalSuccessfulWebEvidenceKeys.add(evidenceKey);
+            }
           }
         } else if (event.type === "response.failed" || event.type === "response.incomplete" || event.type === "error") {
           throw new ResponsesTurnError(`Responses stream ended with ${event.type}.`);
@@ -270,18 +485,29 @@ export class OpenAiResponsesTurnClient {
         throw new ResponsesTurnError("Responses stream ended without response.completed.");
       }
       return {
+        kind: "completed",
         response: completed,
         ...completedAdmission,
         hostedWebCallIds: [...startedWebSearches],
+        successfulHostedWebEvidenceKeys: [...strictSuccessfulWebEvidenceKeys],
       };
     } catch (error) {
       await completeThinking(false);
       for (const callId of [...activeWebSearches]) {
         await completeWebSearch(callId, false);
       }
+      if (!options.signal.aborted &&
+        (stalledResearchActionDeadlineReached || options.evidenceSignal?.aborted === true) &&
+        totalSuccessfulWebEvidenceKeys.size >= MIN_SYNTHESIS_HOSTED_WEB_CALLS) {
+        return researchEvidence();
+      }
       throw error;
     } finally {
-      try { await iterator?.return?.(); } catch { /* aborting a stream is best effort */ }
+      if (stalledResearchActionTimer !== undefined) clearTimeout(stalledResearchActionTimer);
+      try {
+        const closing = iterator?.return?.();
+        if (closing !== undefined) void Promise.resolve(closing).catch(() => {});
+      } catch { /* aborting a stream is best effort and must never delay the turn */ }
     }
   }
 
@@ -352,173 +578,12 @@ export class OpenAiResponsesTurnClient {
   }
 }
 
-function createRequest(
-  request: RunResponsesTurnRequest,
-  input: readonly Record<string, unknown>[],
-  firstLeg: boolean,
-  maxFunctionCalls: number,
-): ResponsesCreateRequest {
-  return {
-    model: OPENAI_RESPONSES_MODEL,
-    service_tier: OPENAI_RESPONSES_SUBSCRIPTION_SERVICE_TIER,
-    reasoning: { effort: request.effort },
-    store: false,
-    stream: true,
-    prompt_cache_key: OPENAI_RESPONSES_PROMPT_CACHE_KEY,
-    instructions: request.instructions,
-    input,
-    tools: request.hostedWebSearch === false
-      ? [...request.localFunctions]
-      : [OPENAI_WEB_SEARCH_TOOL, ...request.localFunctions],
-    include: request.hostedWebSearch === false
-      ? ["reasoning.encrypted_content"] as const
-      : ["reasoning.encrypted_content", "web_search_call.action.sources"] as const,
-    ...(request.hostedWebSearchPolicy === "required_first_leg" && firstLeg
-      ? { tool_choice: { type: "allowed_tools" as const, mode: "required" as const, tools: [{ type: "web_search" as const }] as const } }
-      : {}),
-    max_tool_calls: maxFunctionCalls,
-    parallel_tool_calls: false,
-    ...(request.maxOutputTokens === undefined ? {} : { max_output_tokens: boundedOutputTokens(request.maxOutputTokens) }),
-    ...(request.textJsonSchema === undefined ? {} : { text: { format: jsonSchemaFormat(request.textJsonSchema) } }),
-  };
-}
-
-function assertHostedWebPolicy(request: RunResponsesTurnRequest): void {
-  if (request.hostedWebSearch === false && request.hostedWebSearchPolicy !== undefined) {
-    throw new ResponsesTurnError("Responses hosted web policy cannot require a disabled hosted tool.");
-  }
-  if (request.hostedWebSearchPolicy !== undefined &&
-    request.hostedWebSearchPolicy !== "available" && request.hostedWebSearchPolicy !== "required_first_leg") {
-    throw new ResponsesTurnError("Responses hosted web policy is invalid.");
-  }
-}
-
-function userInput(text: string, image: RunResponsesTurnRequest["image"]): readonly Record<string, unknown>[] {
-  const content: Record<string, unknown>[] = [{ type: "input_text", text }];
-  if (image !== undefined) {
-    if (!/^data:image\/(?:avif|gif|jpe?g|png|webp);base64,[A-Za-z0-9+/=]+$/iu.test(image.dataUrl) || image.dataUrl.length > MAX_IMAGE_DATA_URL_CHARS) {
-      throw new ResponsesTurnError("Responses image input must be a bounded image data URL.");
-    }
-    content.push({ type: "input_image", image_url: image.dataUrl, detail: image.detail ?? "auto" });
-  }
-  return [{ role: "user", content }];
-}
-
-function functionCallsFrom(items: readonly ResponseOutputItem[]): ResponseFunctionToolCall[] {
-  return items.filter((item): item is ResponseFunctionToolCall => item.type === "function_call");
-}
-
-/**
- * The transport-normalized output is already provider wire data. Preserve it
- * as-is in the next stateless leg; serializing individual variants here would
- * risk dropping encrypted reasoning or a hosted-tool record needed by Codex.
- */
-function responseOutputInput(items: readonly ResponseOutputItem[]): readonly Record<string, unknown>[] {
-  return items.map((item) => item as unknown as Record<string, unknown>);
-}
-
-function webSearchItem(item: ResponseOutputItem): {
-  callId: string;
-  action?: ResponsesWebAction;
-  input?: ResponsesWebProgressInput;
-  ok: boolean;
-} | undefined {
-  if (item.type !== "web_search_call" || typeof item.id !== "string") return undefined;
-  const action = recordAction(item.action);
-  const input = webProgressInput(item.action);
-  const status = item.status;
-  return {
-    callId: item.id,
-    ...(action === undefined ? {} : { action }),
-    ...(input === undefined ? {} : { input }),
-    ok: status !== "failed",
-  };
-}
-
-function hasHostedWebSearchCall(items: readonly ResponseOutputItem[]): boolean {
-  return items.some((item) => item.type === "web_search_call");
-}
-
-function recordAction(value: unknown): ResponsesWebAction | undefined {
-  if (value === null || typeof value !== "object") return undefined;
-  const type = (value as { type?: unknown }).type;
-  return type === "search" || type === "open_page" || type === "find_in_page" ? type : undefined;
-}
-
-function webProgressInput(value: unknown): ResponsesWebProgressInput | undefined {
-  if (value === null || typeof value !== "object") return undefined;
-  const action = value as {
-    type?: unknown;
-    query?: unknown;
-    queries?: unknown;
-    url?: unknown;
-    pattern?: unknown;
-  };
-  if (action.type === "search") {
-    const queries = Array.isArray(action.queries)
-      ? action.queries.filter((query): query is string => typeof query === "string")
-      : [];
-    const legacy = typeof action.query === "string" ? [action.query] : [];
-    const query = boundedProgressText([...queries, ...legacy].join(" / "), 512);
-    return query === undefined ? undefined : { query };
-  }
-  if (action.type === "open_page") {
-    const url = boundedProgressText(action.url, 2_048);
-    return url === undefined ? undefined : { url };
-  }
-  if (action.type === "find_in_page") {
-    const pattern = boundedProgressText(action.pattern, 512);
-    const url = boundedProgressText(action.url, 2_048);
-    if (pattern === undefined && url === undefined) return undefined;
-    return {
-      ...(pattern === undefined ? {} : { pattern }),
-      ...(url === undefined ? {} : { url }),
-    };
-  }
-  return undefined;
-}
-
-function boundedProgressText(value: unknown, maximum: number): string | undefined {
-  if (typeof value !== "string") return undefined;
-  const normalized = value.replace(/\s+/gu, " ").trim();
-  if (normalized.length === 0) return undefined;
-  return Array.from(normalized).slice(0, maximum).join("");
-}
-
-function webProgressFingerprint(
-  action: ResponsesWebAction,
-  input: ResponsesWebProgressInput | undefined,
-): string {
-  return JSON.stringify([action, input?.query, input?.url, input?.pattern]);
-}
-
 function parseFunctionCall(call: ResponseFunctionToolCall): LocalFunctionCall {
   try {
     return { callId: call.call_id, name: call.name, arguments: JSON.parse(call.arguments) };
   } catch {
     return { callId: call.call_id, name: call.name, arguments: undefined };
   }
-}
-
-function citationsFrom(response: Response): readonly ResponsesCitation[] {
-  const citations: ResponsesCitation[] = [];
-  for (const item of response.output) {
-    if (item.type !== "message") continue;
-    for (const content of item.content) {
-      if (content.type !== "output_text") continue;
-      for (const annotation of content.annotations) {
-        if (annotation.type === "url_citation" && validCitation(annotation)) {
-          citations.push({
-            startIndex: annotation.start_index,
-            endIndex: annotation.end_index,
-            title: annotation.title,
-            url: annotation.url,
-          });
-        }
-      }
-    }
-  }
-  return citations;
 }
 
 /**
@@ -546,24 +611,6 @@ function assertCompletedResponseAdmission(response: Response): {
   return { model: OPENAI_RESPONSES_MODEL, serviceTier: OPENAI_RESPONSES_SUBSCRIPTION_SERVICE_TIER };
 }
 
-function validCitation(value: { start_index: number; end_index: number; title: string; url: string }): boolean {
-  return Number.isSafeInteger(value.start_index) && Number.isSafeInteger(value.end_index) &&
-    value.start_index >= 0 && value.end_index >= value.start_index &&
-    value.title.length > 0 && value.title.length <= 1_024 && /^https?:\/\//iu.test(value.url);
-}
-
-function usageFrom(response: Response): ResponsesUsage | undefined {
-  const usage = response.usage;
-  if (!usage) return undefined;
-  return {
-    inputTokens: usage.input_tokens,
-    cachedInputTokens: usage.input_tokens_details.cached_tokens,
-    outputTokens: usage.output_tokens,
-    reasoningOutputTokens: usage.output_tokens_details.reasoning_tokens,
-    totalTokens: usage.total_tokens,
-  };
-}
-
 async function nextWithAbort<T>(iterator: AsyncIterator<T>, signal: AbortSignal): Promise<IteratorResult<T>> {
   if (signal.aborted) throw new ResponsesTurnCancelledError();
   let listener: (() => void) | undefined;
@@ -584,65 +631,4 @@ function joinSignals(parent: AbortSignal | undefined, timeout: AbortSignal): Abo
 
 async function progress(request: RunResponsesTurnRequest, event: ResponsesProgressEvent): Promise<void> {
   try { await request.progress?.onProgress(event); } catch { /* presentation never controls a model turn */ }
-}
-
-function assertFunctionSchemas(schemas: readonly { name: string }[]): void {
-  const names = new Set<string>();
-  for (const schema of schemas) {
-    if (!schema || typeof schema.name !== "string" || schema.name.length === 0 || schema.name.length > 128 || names.has(schema.name)) {
-      throw new ResponsesTurnError("Responses local function schemas must have unique bounded names.");
-    }
-    names.add(schema.name);
-  }
-}
-
-function assertFunctionResult(result: { success: boolean; text: string }): void {
-  if (typeof result.success !== "boolean" || typeof result.text !== "string" || result.text.length > MAX_FUNCTION_RESULT_CHARS) {
-    throw new ResponsesTurnError("Responses local function result is invalid or too large.");
-  }
-}
-
-function assertPlainText(value: string, name: string, limit: number): void {
-  if (typeof value !== "string" || value.trim().length === 0 || value.length > limit || /\0/u.test(value)) {
-    throw new ResponsesTurnError(`Responses ${name} must be non-empty and bounded.`);
-  }
-}
-
-function boundedTimeout(value: number): number {
-  if (!Number.isSafeInteger(value) || value < MIN_TIMEOUT_MS || value > MAX_TIMEOUT_MS) {
-    throw new ResponsesTurnError(`Responses timeoutMs must be between ${MIN_TIMEOUT_MS} and ${MAX_TIMEOUT_MS}.`);
-  }
-  return value;
-}
-
-function boundedFunctionCalls(value: number): number {
-  if (!Number.isSafeInteger(value) || value < 1 || value > MAX_FUNCTION_CALLS) {
-    throw new ResponsesTurnError(`Responses maxFunctionCalls must be between 1 and ${MAX_FUNCTION_CALLS}.`);
-  }
-  return value;
-}
-
-function boundedOutputTokens(value: number): number {
-  if (!Number.isSafeInteger(value) || value < 1 || value > MAX_OUTPUT_TOKENS) {
-    throw new ResponsesTurnError(`Responses maxOutputTokens must be between 1 and ${MAX_OUTPUT_TOKENS}.`);
-  }
-  return value;
-}
-
-function assertTextJsonSchema(schema: RunResponsesTurnRequest["textJsonSchema"]): void {
-  if (schema === undefined) return;
-  if (typeof schema.name !== "string" || schema.name.length === 0 || schema.name.length > 64 ||
-    schema.schema === null || typeof schema.schema !== "object") {
-    throw new ResponsesTurnError("Responses textJsonSchema must have a bounded name and object schema.");
-  }
-}
-
-function jsonSchemaFormat(schema: NonNullable<RunResponsesTurnRequest["textJsonSchema"]>): Record<string, unknown> {
-  return {
-    type: "json_schema",
-    name: schema.name,
-    schema: schema.schema,
-    ...(schema.description === undefined ? {} : { description: schema.description }),
-    ...(schema.strict === undefined ? {} : { strict: schema.strict }),
-  };
 }

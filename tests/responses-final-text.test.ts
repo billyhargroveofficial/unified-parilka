@@ -14,3 +14,14 @@ test("removes only an accidental one-field answer envelope", () => {
   );
   assert.equal(normalizeResponsesFinalText("  Обычный Markdown  "), "Обычный Markdown");
 });
+
+test("removes opaque subscription citation placeholders from visible text", () => {
+  assert.equal(
+    normalizeResponsesFinalText("Факт. citeturn2search0turn3search1\n\nИтог."),
+    "Факт.\n\nИтог.",
+  );
+  assert.equal(
+    normalizeResponsesFinalText('{"answer":"Факт fileciteturn0file0"}'),
+    "Факт",
+  );
+});

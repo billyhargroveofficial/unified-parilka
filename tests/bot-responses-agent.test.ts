@@ -129,6 +129,64 @@ test("Responses bot agent requires hosted web only for an explicit web request",
   });
   await agent.run(request({ trigger: message({ messageId: 77, text: "Проверь, работает ли вебпоиск и fetch" }) }));
   assert.equal(requests[0]?.hostedWebSearchPolicy, "required_first_leg");
+  assert.equal(requests[0]?.effort, "max");
+  await agent.close();
+});
+
+test("Responses bot agent reserves max-effort bounded research for explicit deep-dive intent", async () => {
+  const requests: RunResponsesTurnRequest[] = [];
+  const agent = new ResponsesBotTurnAgent({
+    responses: { async run(request) {
+      requests.push(request);
+      return {
+        ...finalResult(),
+        aggregateUsage: {
+          inputTokens: 31, cachedInputTokens: 8, outputTokens: 14,
+          reasoningOutputTokens: 7, totalTokens: 45,
+        },
+      };
+    } },
+    causalRag: { async build() { return packet(); } },
+    media: { async resolveImages() { return []; } },
+    readTools: { async callTool() { throw new Error("not called"); } },
+  });
+
+  const result = await agent.run(request({
+    trigger: message({
+      messageId: 77,
+      text: "какую телегу взять за лям? Проведи нереальный дип дайв ресерч",
+    }),
+  }));
+
+  assert.equal(requests[0]?.hostedWebSearchPolicy, "bounded_research");
+  assert.equal(requests[0]?.effort, "max");
+  assert.match(requests[0]?.instructions ?? "", /Режим bounded research включён/u);
+  assert.match(requests[0]?.instructions ?? "", /актуальные цены и доступность/u);
+  assert.match(requests[0]?.instructions ?? "", /После четвёртого успешного действия немедленно синтезируй итог/u);
+  assert.match(requests[0]?.instructions ?? "", /open_page\/find_in_page/u);
+  assert.equal(result.telemetry.totalInputTokens, 31);
+  assert.equal(result.telemetry.totalOutputTokens, 14);
+  assert.equal(result.telemetry.contextUsedTokens, 11);
+  assert.match(result.text, /ctx 11\/272k/u);
+  await agent.close();
+});
+
+test("Responses bot agent keeps generic detailed recommendations single-pass at max effort", async () => {
+  const requests: RunResponsesTurnRequest[] = [];
+  const agent = new ResponsesBotTurnAgent({
+    responses: { async run(request) { requests.push(request); return finalResult(); } },
+    causalRag: { async build() { return packet(); } },
+    media: { async resolveImages() { return []; } },
+    readTools: { async callTool() { throw new Error("not called"); } },
+  });
+
+  await agent.run(request({
+    trigger: message({ messageId: 77, text: "подробно подбери машину за миллион" }),
+  }));
+
+  assert.equal(requests[0]?.hostedWebSearchPolicy, undefined);
+  assert.equal(requests[0]?.effort, "max");
+  assert.doesNotMatch(requests[0]?.instructions ?? "", /Режим bounded research включён/u);
   await agent.close();
 });
 
@@ -149,8 +207,8 @@ test("Responses bot agent renders an already available quota footer after, never
 
   const result = await agent.run(request());
 
-  assert.match(result.text, /\*GPT-5\.6 Luna Fast · ctx 11\/272k · tools 1 · \d+(?:\.\d+)?(?:ms|s) ● 7d 29%/u);
-  assert.doesNotMatch(requests[0]!.text, /GPT-5\.6 Luna Fast|ctx \?\/272k/u);
+  assert.match(result.text, /\*GPT-5\.6 Luna Fast max · ctx 11\/272k · tools 1 · \d+(?:\.\d+)?(?:ms|s) ● 7d 29%/u);
+  assert.doesNotMatch(requests[0]!.text, /GPT-5\.6 Luna Fast max|ctx \?\/272k/u);
   await agent.close();
 });
 

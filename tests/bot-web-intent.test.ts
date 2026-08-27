@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { requiresHostedWebSearchFirstLeg } from "../src/bot/responses/web-intent.js";
+import {
+  requiresBoundedHostedWebResearch,
+  requiresHostedWebSearchFirstLeg,
+} from "../src/bot/responses/web-intent.js";
 
 test("explicit requests for hosted web/search/fetch require the first hosted call", () => {
   for (const text of [
@@ -30,6 +33,8 @@ test("explicit web negation is not inverted into a required hosted call", () => 
     "не используй интернет, проверь локальную историю",
     "без веба найди это в переписке",
     "web_search не делай; используй keyword_search",
+    "не нужно использовать интернет, ответь из памяти",
+    "интернет использовать не надо",
   ]) {
     assert.equal(requiresHostedWebSearchFirstLeg(text), false, text);
   }
@@ -39,6 +44,44 @@ test("explicit web negation is not inverted into a required hosted call", () => 
   );
   assert.equal(
     requiresHostedWebSearchFirstLeg("веб не используй, но fetch страницы сделай"),
+    true,
+  );
+});
+
+test("explicit deep-research wording opts into bounded hosted research", () => {
+  for (const text of [
+    "Проведи deep dive research по BMW E60 в РФ",
+    "Сделай дип-дайв ресерч цен на тачки в августе 2026",
+    "Нужно глубокое исследование рынка квартир",
+    "Проведи нереальный дип дайв ресерч и выдай лучший вариант",
+    "deep_research current GPU prices",
+  ]) {
+    assert.equal(requiresBoundedHostedWebResearch(text), true, text);
+  }
+});
+
+test("generic detail and explicitly local or no-web research stay off the bounded path", () => {
+  for (const text of [
+    "Подробно расскажи про BMW",
+    "Подбери тачку за миллион",
+    "Сравни две машины",
+    "Сделай дип дайв по истории этого чата",
+    "Без веба сделай ресерч по приложенному документу",
+    "Не делай deep research, ответь коротко",
+    "Не делай дип-дайв ресерч, ответь коротко",
+    "Без дип-дайв ресерча, ответь из памяти",
+    "Не нужно проводить исследование, ответь из памяти",
+    "Веб не используй, проведи глубокое исследование по приложенному файлу",
+    "Не нужно использовать интернет, сделай deep research по своим знаниям",
+    undefined,
+  ]) {
+    assert.equal(requiresBoundedHostedWebResearch(text), false, String(text));
+  }
+});
+
+test("an explicit positive web clause takes precedence over local research scope", () => {
+  assert.equal(
+    requiresBoundedHostedWebResearch("Сделай дип дайв по истории чата и проверь вывод через веб-поиск"),
     true,
   );
 });
