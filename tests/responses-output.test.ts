@@ -1,7 +1,32 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ResponseOutputItem } from "openai/resources/responses/responses";
-import { citationsFromWebEvidence } from "../src/openai-responses/response-output.js";
+import { citationsFromWebEvidence, webSearchItem } from "../src/openai-responses/response-output.js";
+
+test("preserves hosted query batch cardinality for safe progress projection", () => {
+  const item = webSearchItem({
+    type: "web_search_call", id: "web-batch", status: "completed",
+    action: { type: "search", queries: ["first", "second", "third"] },
+  } as unknown as ResponseOutputItem);
+
+  assert.deepEqual(item, {
+    callId: "web-batch",
+    action: "search",
+    input: { query: "first / second / third" },
+    batchSize: 3,
+    ok: true,
+  });
+});
+
+test("prefers provider query batches over a legacy duplicate query field", () => {
+  const item = webSearchItem({
+    type: "web_search_call", id: "web-batch", status: "completed",
+    action: { type: "search", query: "legacy", queries: ["first", "second"] },
+  } as unknown as ResponseOutputItem);
+
+  assert.equal(item?.batchSize, 2);
+  assert.deepEqual(item?.input, { query: "first / second" });
+});
 
 test("derives bounded HTTPS fallback citations from completed web evidence", () => {
   const items = [

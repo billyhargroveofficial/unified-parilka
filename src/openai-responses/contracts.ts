@@ -7,6 +7,8 @@ import type {
 /** The only public model identity accepted by the Telegram response path. */
 export const OPENAI_RESPONSES_MODEL = "gpt-5.6-luna" as const;
 export const OPENAI_RESPONSES_SERVICE_TIER = "fast" as const;
+/** Fixed interactive-chat reasoning budget for the production Luna loop. */
+export const OPENAI_RESPONSES_INTERACTIVE_REASONING_EFFORT = "xhigh" as const;
 /**
  * The subscription Responses wire calls its Fast lane `priority`.  Keep the
  * public runtime policy (`fast`) separate from the exact wire value so callers
@@ -87,12 +89,16 @@ export type ResponsesProgressEvent =
     readonly callId: string;
     readonly action?: ResponsesWebAction;
     readonly input?: ResponsesWebProgressInput;
+    /** Number of provider queries represented by this hosted action. */
+    readonly batchSize?: number;
   }
   | {
     readonly type: "hosted_web_action";
     readonly callId: string;
     readonly action: ResponsesWebAction;
     readonly input?: ResponsesWebProgressInput;
+    /** Number of provider queries represented by this hosted action. */
+    readonly batchSize?: number;
   }
   | { readonly type: "hosted_web_completed"; readonly callId: string; readonly ok: boolean }
   | {

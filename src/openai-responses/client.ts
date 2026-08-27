@@ -335,9 +335,10 @@ export class OpenAiResponsesTurnClient {
       callId: string,
       action?: ResponsesWebAction,
       input?: ResponsesWebProgressInput,
+      batchSize?: number,
       completedOk = true,
     ): Promise<void> => {
-      const announced = webProgressFingerprint(action ?? "search", input);
+      const announced = webProgressFingerprint(action ?? "search", input, batchSize);
       if (completedWebSearches.has(callId)) {
         // On the subscription wire the granular `completed` event arrives
         // before `output_item.done`, which is the first event carrying action
@@ -348,6 +349,7 @@ export class OpenAiResponsesTurnClient {
           await progress(options.request, {
             type: "hosted_web_action", callId, action,
             ...(input === undefined ? {} : { input }),
+            ...(batchSize === undefined ? {} : { batchSize }),
           });
           await progress(options.request, {
             type: "hosted_web_completed", callId, ok: completedOk,
@@ -363,6 +365,7 @@ export class OpenAiResponsesTurnClient {
           type: "hosted_web_started", callId,
           ...(action === undefined ? {} : { action }),
           ...(input === undefined ? {} : { input }),
+          ...(batchSize === undefined ? {} : { batchSize }),
         });
         // Missing early metadata is presented as search by the Telegram
         // projection, so remember that same fallback for late-action dedupe.
@@ -374,6 +377,7 @@ export class OpenAiResponsesTurnClient {
           await progress(options.request, {
             type: "hosted_web_action", callId, action,
             ...(input === undefined ? {} : { input }),
+            ...(batchSize === undefined ? {} : { batchSize }),
           });
         }
       }
@@ -420,7 +424,7 @@ export class OpenAiResponsesTurnClient {
           }
           if (web !== undefined) {
             await completeThinking(true);
-            await startWebSearch(web.callId, web.action, web.input, web.ok);
+            await startWebSearch(web.callId, web.action, web.input, web.batchSize, web.ok);
             if (event.type === "response.output_item.done") {
               await completeWebSearch(web.callId, web.ok);
               if (web.ok) {
@@ -468,7 +472,7 @@ export class OpenAiResponsesTurnClient {
           for (const item of event.response.output) {
             const web = webSearchItem(item);
             if (web === undefined) continue;
-            await startWebSearch(web.callId, web.action, web.input, web.ok);
+            await startWebSearch(web.callId, web.action, web.input, web.batchSize, web.ok);
             await completeWebSearch(web.callId, web.ok);
             if (web.ok) {
               const evidenceKey = webProgressFingerprint(web.action ?? "search", web.input);

@@ -78,7 +78,7 @@ export function researchSynthesisInput(
   };
 }
 
-/** Reserve part of the logical turn for a tool-free max-effort synthesis leg. */
+/** Reserve part of the logical turn for a tool-free interactive-effort synthesis leg. */
 export function researchEvidencePhaseTimeoutMs(totalTimeoutMs: number): number {
   const reserve = Math.min(60_000, Math.max(MIN_SYNTHESIS_RESERVE_MS, Math.floor(totalTimeoutMs / 3)));
   return Math.min(MAX_EVIDENCE_PHASE_MS, totalTimeoutMs - reserve);

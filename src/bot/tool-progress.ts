@@ -1,3 +1,7 @@
+import { renderProgressText } from "./tool-progress-render.js";
+
+export { renderProgressText } from "./tool-progress-render.js";
+
 /**
  * Bounded, persisted Telegram tool-progress message.
  *
@@ -14,6 +18,8 @@ export interface ToolProgressEvent {
   readonly toolId?: string;
   /** Raw model input is projected through an allowlist before presentation. */
   readonly input?: Readonly<Record<string, unknown>>;
+  /** Number of provider-side operations represented by this event. */
+  readonly batchSize?: number;
 }
 
 /**
@@ -101,17 +107,16 @@ export interface ToolProgressPublisherOptions {
   scheduler?: ToolProgressScheduler;
 }
 
-interface ToolCallStatus {
+export interface ToolCallStatus {
   readonly kind: "thinking" | "tool";
   readonly toolName: string;
   readonly toolId?: string;
   readonly state: "running" | "ok" | "error";
   readonly inputPreview?: string;
+  readonly batchSize?: number;
 }
 
 const DEFAULT_MAX_TEXT_LENGTH = 3_500;
-/** Each accumulated tool occupies exactly one compact logical row. */
-const MAX_PROGRESS_LINE_LENGTH = 48;
 export const DEFAULT_PROGRESS_MIN_VISIBLE_MS = 1_000;
 const MAX_PROGRESS_MIN_VISIBLE_MS = 1_200;
 /**
@@ -254,10 +259,14 @@ export class ToolProgressPublisher implements ToolProgressPort {
         this.#pending.delete(callId);
       }
     }
+    const batchSize = normalizedBatchSize(event.batchSize);
     this.#pending.set(event.callId, {
       kind: "tool",
       toolName: event.toolName,
       ...(event.toolId === undefined ? {} : { toolId: event.toolId }),
+      ...(batchSize === undefined
+        ? {}
+        : { batchSize }),
       state: "running",
       inputPreview: toolInputPreview(event.toolId ?? event.toolName, event.input),
     });
@@ -267,12 +276,16 @@ export class ToolProgressPublisher implements ToolProgressPort {
   onToolCompleted(event: ToolProgressEvent, ok: boolean): void {
     if (this.#finished) return;
     const previous = this.#pending.get(event.callId);
+    const batchSize = normalizedBatchSize(event.batchSize) ?? previous?.batchSize;
     this.#pending.set(event.callId, {
       kind: previous?.kind ?? "tool",
       toolName: event.toolName,
       ...(previous?.toolId === undefined && event.toolId === undefined
         ? {}
         : { toolId: event.toolId ?? previous?.toolId }),
+      ...(batchSize === undefined
+        ? {}
+        : { batchSize }),
       state: ok ? "ok" : "error",
       inputPreview:
         previous?.inputPreview ?? toolInputPreview(
@@ -535,30 +548,9 @@ function sleep(
   });
 }
 
-export function renderProgressText(
-  pending: ReadonlyMap<string, ToolCallStatus>,
-  maxLength: number,
-): string {
-  const capacity = Math.max(1, Math.floor(maxLength));
-  const lines: string[] = [];
-  let used = 0;
-  for (const status of pending.values()) {
-    const separatorLength = lines.length === 0 ? 0 : 1;
-    const remaining = capacity - used - separatorLength;
-    if (remaining <= 0) break;
-    const icon =
-      status.kind === "thinking" && status.state === "running"
-        ? "🧠"
-        : status.state === "running" ? "⏳" : status.state === "ok" ? "✓" : "✗";
-    const preview = status.inputPreview ? ` · ${status.inputPreview}` : "";
-    const line = truncateSingleLine(
-      `${icon} ${status.toolName}${preview}`,
-      Math.min(MAX_PROGRESS_LINE_LENGTH, remaining),
-    );
-    lines.push(line);
-    used += separatorLength + Array.from(line).length;
-  }
-  return lines.join("\n");
+function normalizedBatchSize(value: number | undefined): number | undefined {
+  if (value === undefined || !Number.isSafeInteger(value) || value < 1) return undefined;
+  return Math.min(value, 99);
 }
 
 /**
@@ -641,15 +633,6 @@ function compactUrl(value: string): string {
   } catch {
     return queryPreviewText(value);
   }
-}
-
-function truncateSingleLine(value: string, maxLength: number): string {
-  const normalized = value.replace(/\s+/gu, " ").trim();
-  const characters = Array.from(normalized);
-  const capacity = Math.max(1, Math.floor(maxLength));
-  if (characters.length <= capacity) return normalized;
-  if (capacity === 1) return "…";
-  return `${characters.slice(0, capacity - 1).join("")}…`;
 }
 
 function textField(

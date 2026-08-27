@@ -19,7 +19,7 @@ deployment by themselves.
   Shared `telegram-mcp.service` is outside this scope.
 - The bot is a direct TypeScript Codex-subscription Responses client
   hard-pinned to `gpt-5.6-luna`; Fast is `priority` on the wire and interactive
-  reasoning effort is `max`. It uses hosted web in every chat request and six
+  reasoning effort is `xhigh`. It uses hosted web in every chat request and six
   local read-only functions. The preflight makes one bounded direct Responses
   admission request with hosted web declared and `tool_choice=none`: no SQLite
   or Telegram polling/send occurs.

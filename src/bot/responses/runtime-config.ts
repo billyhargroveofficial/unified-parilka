@@ -1,9 +1,11 @@
 import { accessSync, closeSync, constants, fstatSync, lstatSync, openSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
+import { OPENAI_RESPONSES_INTERACTIVE_REASONING_EFFORT } from "../../openai-responses/contracts.js";
 
 const RESPONSES_MODEL = "gpt-5.6-luna" as const;
 /** `fast` is requested; the subscription backend reports the effective tier as `priority`. */
 const RESPONSES_SERVICE_TIER = "fast" as const;
+const RESPONSES_REASONING_EFFORT = OPENAI_RESPONSES_INTERACTIVE_REASONING_EFFORT;
 
 export type BotResponsesRuntimeEnvironment = Readonly<Record<string, string | undefined>>;
 
@@ -16,6 +18,7 @@ export interface BotResponsesRuntimeConfig {
   readonly authFile: string;
   readonly model: typeof RESPONSES_MODEL;
   readonly serviceTier: typeof RESPONSES_SERVICE_TIER;
+  readonly reasoningEffort: typeof RESPONSES_REASONING_EFFORT;
   readonly turnTimeoutMs: number;
 }
 
@@ -24,6 +27,7 @@ export interface SafeBotResponsesRuntimeConfig {
   readonly subscriptionAuthConfigured: true;
   readonly model: typeof RESPONSES_MODEL;
   readonly serviceTier: typeof RESPONSES_SERVICE_TIER;
+  readonly reasoningEffort: typeof RESPONSES_REASONING_EFFORT;
   readonly turnTimeoutMs: number;
 }
 
@@ -41,6 +45,7 @@ export function parseBotResponsesRuntimeConfig(
     ),
     model: RESPONSES_MODEL,
     serviceTier: RESPONSES_SERVICE_TIER,
+    reasoningEffort: RESPONSES_REASONING_EFFORT,
     turnTimeoutMs: integer(
       env.PARILKA_BOT_RESPONSES_TURN_TIMEOUT_MS,
       180_000,
@@ -98,6 +103,7 @@ export function safeBotResponsesRuntimeConfig(
     subscriptionAuthConfigured: true,
     model: config.model,
     serviceTier: config.serviceTier,
+    reasoningEffort: config.reasoningEffort,
     turnTimeoutMs: config.turnTimeoutMs,
   };
 }

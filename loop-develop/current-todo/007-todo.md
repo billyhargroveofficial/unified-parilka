@@ -16,10 +16,11 @@ Telegram owner, быстрый typing/tool-progress, Rich Messages и подтв
 - Разрешение включает repo-owned bot/maintenance runtime, systemd/config/docs,
   безопасную миграцию state и минимальные маркированные Telegram E2E после
   готового exclusive cutover.
-- Commit, push и удаление rollback/state backups не разрешены и не выполняются.
-- Текущий работающий Codex runtime сохраняется до зелёных тестов, отдельного
-  Responses API credential и готового rollback; секреты нельзя печатать,
-  логировать или добавлять в Git.
+- Пользователь 2026-08-27 явно разрешил commit и push repo-owned изменений
+  Goal 007. Удаление rollback/state backups по-прежнему не разрешено.
+- Секреты subscription OAuth нельзя печатать, логировать или добавлять в Git;
+  production использует отдельную owner-only копию auth state, а не shared
+  runtime-сессию Codex CLI.
 
 ## Source Research Summary
 
@@ -31,8 +32,9 @@ Telegram owner, быстрый typing/tool-progress, Rich Messages и подтв
   Rich Messages и causal cache tools. Эти слои остаются; заменяется agent/model
   boundary и Codex-specific maintenance adapters.
 - Official OpenAI model docs подтверждают, что `gpt-5.6-luna` поддерживает
-  Responses, streaming, image input, function calling и hosted web search.
-  Fast mode задаётся непосредственно как `service_tier: "fast"`.
+  Responses, streaming, image input, function calling, hosted web search и
+  `reasoning.effort: "xhigh"`. Fast product policy у subscription backend
+  передаётся как wire `service_tier: "priority"`.
 - Hosted web search должен находиться в каждом Responses request как
   `{type:"web_search"}`. Его stream actions `search`, `open_page` и
   `find_in_page` дают честный Telegram progress; `url_citation` annotations
@@ -43,12 +45,11 @@ Telegram owner, быстрый typing/tool-progress, Rich Messages и подтв
   `просмотр изображения`; file id, token URL и path модели/логам не выдаются.
 - Новый RAG — host-side causal context packet: reply + bounded recent context
   всегда, hybrid BM25/BGE-M3 sparse+dense/RRF/rerank только при history intent,
-  causal digest только при temporal intent; пять read-only function tools
+  causal digest только при temporal intent; шесть read-only function tools
   остаются для углубления. Везде cutoff строго `< trigger message id`.
-- Для public Responses API отдельного project API key на машине пока нет.
-  Codex OAuth из `~/.codex/auth.json` не переиспользуется. Код и offline tests
-  делаются заранее; live cutover ждёт owner-only credential через systemd
-  `LoadCredential`.
+- Direct transport использует отдельную writable owner-only копию Codex
+  subscription OAuth state. Hermes, Codex CLI и app-server не участвуют в
+  model path; refresh/recovery остаётся внутри узкого TypeScript transport.
 
 ## Product Shape
 
@@ -56,11 +57,12 @@ Telegram owner, быстрый typing/tool-progress, Rich Messages и подтв
 Telegram Bot API -> durable TS worker -> causal RAG/context builder
                                            |
                                            v
-                            OpenAI Responses API (server request)
-                              model: gpt-5.6-luna, tier: fast
+                     Codex subscription Responses (server request)
+                              model: gpt-5.6-luna, tier: fast/priority
+                              effort: xhigh
                               hosted: web_search
                               input: text + optional input_image
-                              local: five causal read functions
+                              local: six causal read functions
                                            |
                       streamed progress + cited rich final response
                                            |
@@ -82,7 +84,7 @@ Developer instructions и tool policy передаются заново в ка�
    lifecycle в Telegram progress и безопасно отрендерить web citations.
 4. [x] Реализовать новый causal RAG packet с bounded recent/reply context,
    deterministic intent routing, hybrid retrieval, digest routing, timeout и
-   graceful BM25/recent-only degradation; сохранить ровно пять local tools.
+   graceful BM25/recent-only degradation; сохранить ровно шесть local tools.
 5. [x] Вернуть bounded Telegram image ingestion: trigger/one-hop reply, getFile,
    redirect-free download, size/MIME/decoder validation, in-memory data URL и
    прямой `input_image` в Responses request.
@@ -90,14 +92,21 @@ Developer instructions и tool policy передаются заново в ка�
    сохранив durable poller, split HTTP pools, typing, progress и Rich Messages.
 7. [x] Перевести digest/Dream maintenance на общий Luna/fast Responses transport;
    удалить production coupling к Codex app-server, оставив rollback material.
-8. [x] Добавить systemd `LoadCredential`, owner-only key reader, examples/docs/ADR
-   и fail-closed preflight без утечки credential.
+8. [x] Добавить owner-only subscription auth state, examples/docs/ADR и
+   fail-closed preflight без утечки credential.
 9. [x] Пройти focused offline fake-stream tests, temp-DB/rollback rehearsal,
    безопасный `npm run verify:responses`, secret scan и normal-host service
    checks без перезаписи rollback `dist/` работающего owner.
-10. [ ] После provision отдельного API key сделать backup, exclusive cutover и
+10. [x] Сделать backup, exclusive cutover и
     минимальный live E2E: обычный reply, hosted web/open, image vision, RAG,
     visible typing/progress и Rich Message final.
+11. [x] Переключить interactive Luna на hard-pinned `xhigh`; отображать
+    provider `action.queries[]` и параллельные hosted items как компактные
+    `web_search ×N` / `web_fetch ×N` строки, сохраняя late relabel по call id.
+12. [ ] Устранить подтверждённые long-tail defects: bounded Telegram progress
+    I/O на terminal path, уникальный per-request correlation id и отдельный
+    synthesis/no-progress watchdog для bounded research; затем повторить
+    timeout/deep-research E2E.
 
 ## Target Files
 
@@ -132,16 +141,20 @@ web/open, image и causal-history E2E.
 
 ## Current Verification Status
 
-- `npm run verify:responses` — green. Он включает typecheck, shell/Node syntax,
-  architecture (240 production / 140 test files), все systemd units, 754/754
-  offline TypeScript tests, 48/48 BGE-M3 contract tests, retrieval recall@5
-  `0.944` при target `0.75`, secret scan 607 файлов, mtcute/source/direct MCP
-  smokes, `npm audit` с 0 vulnerabilities и финальный immutable build.
-- Активный staging release:
-  `20260827110550156-2202867-8b54e1d22b51`; директория `0555`, entrypoints и
-  `RESPONSES_SOURCE_MANIFEST.json` — `0444`. Launcher сверяет детерминированный
-  SHA-256 manifest runtime source/config/package inputs перед запуском;
-  `dist/` работающего старого owner не изменён.
+- `npm run verify:responses` повторно green 2026-08-27 после xhigh/batch
+  изменений: typecheck, shell/architecture/systemd, полный offline test suite,
+  48/48 BGE-M3 contract tests, retrieval recall@5 `0.944` при target `0.75`,
+  secret scan, mtcute/MCP smokes, `npm audit` с 0 vulnerabilities и immutable
+  release build.
+- Production `parilka-bot.service` исполняет release
+  `20260827190248558-3286437-39e81926cd87`; preflight admitted exact
+  `gpt-5.6-luna` + effective `priority`, runtime log фиксирует code-owned
+  `reasoningEffort: "xhigh"`, один poller active, restart count 0.
+- Live subscription shape probe вернул один `web_search_call` с четырьмя
+  `action.queries`. Маркированный Telegram E2E поймал последовательные transient
+  snapshots `web_search ×1` → `web_search ×4`, затем Rich final с footer
+  `GPT-5.6 Luna Fast xhigh`; progress удалился штатно, все E2E trigger/final
+  сообщения после проверки удалены и повторно отсутствуют в history.
 - Read-only live-DB RAG benchmark на 23 212 BGE-M3/1024 chunks: три полных
   BM25+dense+sparse+rerank запроса за `0.696–0.908 s`, по 8 evidence. Dense и
   sparse отсекают chunk до scoring только при `end_message_id < trigger`, так
@@ -155,36 +168,33 @@ web/open, image и causal-history E2E.
   проверяет exact Luna и effective fast tier; explicit web intent требует
   фактический `web_search_call`. Causal labels заменяются только безопасной
   host-rendered attribution без Telegram IDs или локальных путей.
-- Normal host: старый `parilka-bot.service` остаётся active/enabled и исполняет
-  rollback Codex build; `parilka-sync`, `parilka-bge-m3` и maintenance timer
-  healthy. Staged Responses env slices — regular owner-only `0600`, bot slice
-  безопасно оставлен `shadow` с пустым exclusive acknowledgement.
-- Live Responses preflight/cutover намеренно не начаты: отдельный
-  `~/.config/parilka/openai-responses-api-key` пока отсутствует. Установленный
-  `parilka-bot-preflight.service` всё ещё относится к старому Codex runtime и
-  будет заменён только после credential provision.
+- Normal host: `parilka-bot`, `parilka-sync` и `parilka-bge-m3` active; direct
+  TypeScript Responses owner работает в live mode, legacy Hermes/Codex owner не
+  участвует в production graph.
 
 ## Done Means
 
 - Production bot и maintenance не запускают Codex app-server и не зависят от
   Hermes/SearXNG/Firecrawl/старого ModelRouter.
-- Все model calls hard-pinned к `gpt-5.6-luna` и `service_tier=fast`; попытка
-  подмены model/tier отклоняется config/preflight.
+- Все interactive model calls hard-pinned к `gpt-5.6-luna`,
+  `service_tier=fast` и `reasoning.effort=xhigh`; попытка подмены model/tier
+  отклоняется config/preflight.
 - Hosted web search реально передаётся в Responses request, его progress виден
   в Telegram, а подтверждённые citations кликабельны в Rich final.
 - Image из trigger/reply проверяется и идёт напрямую как `input_image`; typing
   появляется сразу, progress корректно обновляется/удаляется, секретные
   Telegram identifiers не попадают в provider input или logs.
-- Новый RAG causal, bounded и graceful-degrading; пять local tools остаются
+- Новый RAG causal, bounded и graceful-degrading; шесть local tools остаются
   read-only и не дают модели подделать chat/source/cutoff.
 - Full verification зелёная, rollback проверен, live unit healthy и
   маркированные E2E имеют terminal `sent` без duplicate delivery.
 
 ## Copy-Ready Goal Prompt
 
-Продолжай Goal 007 до полного рабочего production deploy. Сначала читай
+Продолжай Goal 007 до устранения оставшихся production long-tail defects. Сначала читай
 `AGENTS.md`, этот TODO, `operations/RESPONSES.md` и релевантные ADR. Не возвращай
-Hermes, SearXNG, Firecrawl или старый ModelRouter. Сохраняй dirty-worktree,
-single-owner, secret-isolation и no-commit/no-push границы. Не закрывай goal до
-зелёного `npm run verify:responses`, безопасного credential provisioning, backup,
-exclusive cutover и живых text/web/image/RAG E2E.
+Hermes, SearXNG, Firecrawl или старый ModelRouter. Сохраняй unrelated
+dirty-worktree, single-owner и secret-isolation. Не закрывай goal до
+bounded terminal progress I/O, корректного per-request correlation id,
+synthesis watchdog, зелёного `npm run verify:responses` и повторного живого
+deep-research E2E без зависшего progress/final tail.

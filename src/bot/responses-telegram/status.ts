@@ -1,4 +1,5 @@
 import type { CodexSubscriptionUsageSnapshot } from "../../openai-responses/codex-subscription-usage.js";
+import { OPENAI_RESPONSES_INTERACTIVE_REASONING_EFFORT } from "../../openai-responses/contracts.js";
 
 /** Current CodeX model-catalog context window for the code-owned Luna model. */
 export const LUNA_CONTEXT_WINDOW_TOKENS = 272_000;
@@ -16,7 +17,7 @@ export interface ResponsesStatusFooter {
 export function renderResponsesStatusFooter(input: ResponsesStatusFooter): string {
   const context = input.inputTokens === undefined ? "?" : compactTokens(input.inputTokens);
   const usage = renderWeeklyUsage(selectWeeklyWindow(input.usage), input.nowMs ?? Date.now());
-  return `\n\n*GPT-5.6 Luna Fast max · ctx ${context}/${compactTokens(LUNA_CONTEXT_WINDOW_TOKENS)} · tools ${compactCount(input.toolCalls)} · ${compactDuration(input.durationMs)} ● ${usage}*`;
+  return `\n\n*GPT-5.6 Luna Fast ${OPENAI_RESPONSES_INTERACTIVE_REASONING_EFFORT} · ctx ${context}/${compactTokens(LUNA_CONTEXT_WINDOW_TOKENS)} · tools ${compactCount(input.toolCalls)} · ${compactDuration(input.durationMs)} ● ${usage}*`;
 }
 
 function selectWeeklyWindow(

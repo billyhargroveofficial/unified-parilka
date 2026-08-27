@@ -40,13 +40,14 @@ test("terminal-only hosted web records render safe Telegram search/open/find lif
     "tool:start:responses:web:terminal-find:find_in_page",
     "tool:done:true:responses:web:terminal-find:find_in_page",
   ]);
-  assert.deepEqual(started.map(({ toolName, toolId, input }) => ({ toolName, toolId, input })), [
-    { toolName: "web_search", toolId: "hosted_web", input: { query: "private query" } },
-    { toolName: "web_fetch", toolId: "hosted_web", input: { url: "https://private.example" } },
+  assert.deepEqual(started.map(({ toolName, toolId, input, batchSize }) => ({ toolName, toolId, input, batchSize })), [
+    { toolName: "web_search", toolId: "hosted_web", input: { query: "private query" }, batchSize: 1 },
+    { toolName: "web_fetch", toolId: "hosted_web", input: { url: "https://private.example" }, batchSize: undefined },
     {
       toolName: "find_in_page",
       toolId: "hosted_web",
       input: { pattern: "needle", url: "https://private.example" },
+      batchSize: undefined,
     },
   ]);
 });
@@ -149,11 +150,13 @@ function project(event: ResponsesProgressEvent, progress: ResponsesTelegramProgr
       itemId: event.callId,
       action: event.action ?? "search",
       ...(event.input === undefined ? {} : { input: { ...event.input } }),
+      ...(event.batchSize === undefined ? {} : { batchSize: event.batchSize }),
     }); break;
     case "hosted_web_action": progress.startWeb({
       itemId: event.callId,
       action: event.action,
       ...(event.input === undefined ? {} : { input: { ...event.input } }),
+      ...(event.batchSize === undefined ? {} : { batchSize: event.batchSize }),
     }); break;
     case "hosted_web_completed": progress.completeWeb(event.callId, event.ok); break;
     case "local_function_started":

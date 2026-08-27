@@ -33,6 +33,7 @@ import {
   type LocalFunctionCall,
   type LocalFunctionResult,
   type CodexSubscriptionUsageSnapshot,
+  OPENAI_RESPONSES_INTERACTIVE_REASONING_EFFORT,
   type ResponsesProgressEvent,
   type RunResponsesTurnRequest,
   type RunResponsesTurnResult,
@@ -146,7 +147,7 @@ export class ResponsesBotTurnAgent implements BotTurnAgent {
         instructions: boundedResearch
           ? `${PARILKA_RESPONSES_INSTRUCTIONS}\n${PARILKA_BOUNDED_RESEARCH_INSTRUCTIONS}`
           : PARILKA_RESPONSES_INSTRUCTIONS,
-        effort: "max",
+        effort: OPENAI_RESPONSES_INTERACTIVE_REASONING_EFFORT,
         localFunctions: localFunctionSchemas(),
         dispatcher: {
           dispatch: (call, signal) => this.#dispatchLocalTool(call, request.turn.triggerMessageId, signal),
@@ -256,11 +257,13 @@ function forwardProgress(progress: ResponsesTelegramProgress, event: ResponsesPr
       itemId: event.callId,
       action: event.action ?? "search",
       ...(event.input === undefined ? {} : { input: { ...event.input } }),
+      ...(event.batchSize === undefined ? {} : { batchSize: event.batchSize }),
     }); break;
     case "hosted_web_action": progress.startWeb({
       itemId: event.callId,
       action: event.action,
       ...(event.input === undefined ? {} : { input: { ...event.input } }),
+      ...(event.batchSize === undefined ? {} : { batchSize: event.batchSize }),
     }); break;
     case "hosted_web_completed": progress.completeWeb(event.callId, event.ok); break;
     case "local_function_started":

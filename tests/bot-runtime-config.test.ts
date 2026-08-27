@@ -25,6 +25,7 @@ test("Responses bot runtime config is explicit, secret-safe, and pins Luna fast"
   assert.equal(config.mode, "shadow");
   assert.equal(config.responses.model, "gpt-5.6-luna");
   assert.equal(config.responses.serviceTier, "fast");
+  assert.equal(config.responses.reasoningEffort, "xhigh");
   assert.equal(config.responses.turnTimeoutMs, 180_000);
   assert.equal(config.rag.vector.embeddings.backend, "local_bge_m3");
   const safe = JSON.stringify(safeBotRuntimeConfig(config));

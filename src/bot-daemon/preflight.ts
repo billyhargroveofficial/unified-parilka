@@ -1,6 +1,7 @@
 import {
   CodexSubscriptionAuthStore,
   CodexSubscriptionResponsesTransport,
+  OPENAI_RESPONSES_INTERACTIVE_REASONING_EFFORT,
 } from "../openai-responses/index.js";
 import {
   parseBotResponsesRuntimeConfig,
@@ -15,7 +16,7 @@ export interface BotResponsesPreflightRequest {
   readonly model: "gpt-5.6-luna";
   /** Codex subscription wire value for logical Fast. */
   readonly service_tier: "priority";
-  readonly reasoning: Readonly<{ effort: "max" }>;
+  readonly reasoning: Readonly<{ effort: typeof OPENAI_RESPONSES_INTERACTIVE_REASONING_EFFORT }>;
   readonly store: false;
   readonly stream: true;
   readonly input: readonly [Readonly<{
@@ -119,7 +120,7 @@ function preflightRequest(config: BotResponsesRuntimeConfig): BotResponsesPrefli
   return {
     model: config.model,
     service_tier: "priority",
-    reasoning: { effort: "max" },
+    reasoning: { effort: config.reasoningEffort },
     store: false,
     stream: true,
     input: [{

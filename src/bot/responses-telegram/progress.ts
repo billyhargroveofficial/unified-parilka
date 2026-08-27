@@ -22,6 +22,8 @@ export interface ResponsesWebProgressEvent {
   readonly itemId: string;
   readonly action: ResponsesWebAction;
   readonly input?: Readonly<Record<string, unknown>>;
+  /** Provider-side `queries` batch cardinality; never raw query payload. */
+  readonly batchSize?: number;
 }
 
 /**
@@ -106,7 +108,13 @@ export class ResponsesTelegramProgress {
     if (label === undefined) {
       return;
     }
-    this.#start(`responses:web:${itemId}`, label, "hosted_web", event.input);
+    this.#start(
+      `responses:web:${itemId}`,
+      label,
+      "hosted_web",
+      event.input,
+      boundedBatchSize(event.batchSize),
+    );
   }
 
   completeWeb(itemId: string, ok = true): void {
@@ -162,9 +170,11 @@ export class ResponsesTelegramProgress {
     toolName: string,
     toolId: string,
     input?: Readonly<Record<string, unknown>>,
+    batchSize?: number,
   ): void {
     const previous = this.#events.get(callId);
     if (previous?.toolName === toolName &&
+      previous.batchSize === batchSize &&
       progressInputFingerprint(previous.input) === progressInputFingerprint(input)) {
       return;
     }
@@ -174,6 +184,7 @@ export class ResponsesTelegramProgress {
       callId,
       toolName,
       toolId,
+      ...(batchSize === undefined ? {} : { batchSize }),
       ...(input === undefined ? {} : { input }),
     };
     this.#events.set(callId, event);
@@ -188,6 +199,11 @@ export class ResponsesTelegramProgress {
     this.#events.delete(callId);
     notify(() => this.#port?.onToolCompleted(event, ok));
   }
+}
+
+function boundedBatchSize(value: number | undefined): number | undefined {
+  if (!Number.isSafeInteger(value) || value === undefined || value < 1) return undefined;
+  return Math.min(value, 99);
 }
 
 function progressInputFingerprint(

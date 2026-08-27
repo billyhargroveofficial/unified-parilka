@@ -121,7 +121,7 @@ function successfulProbe(events: string[]): BotResponsesPreflightProbe {
       assert.deepEqual(request, {
         model: "gpt-5.6-luna",
         service_tier: "priority",
-        reasoning: { effort: "max" },
+        reasoning: { effort: "xhigh" },
         store: false,
         stream: true,
         input: [{ role: "user", content: [{ type: "input_text", text: "Responses preflight: reply exactly READY." }] }],

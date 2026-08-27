@@ -23,6 +23,7 @@ test("Responses runtime pins Luna/Fast and redacts shared subscription auth stat
     authFile,
     model: "gpt-5.6-luna",
     serviceTier: "fast",
+    reasoningEffort: "xhigh",
     turnTimeoutMs: 180_000,
   });
   assert.doesNotThrow(() => assertBotCodexAuthFile(config));

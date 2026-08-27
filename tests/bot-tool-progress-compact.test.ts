@@ -5,6 +5,7 @@ import {
   type ToolProgressBotApiPort,
   type ToolProgressEvent,
 } from "../src/bot/tool-progress.js";
+import { ResponsesTelegramProgress } from "../src/bot/responses-telegram/index.js";
 
 async function renderFirstRow(event: ToolProgressEvent): Promise<string> {
   let visible = "";
@@ -28,8 +29,7 @@ async function renderFirstRow(event: ToolProgressEvent): Promise<string> {
     minVisibleMs: 0,
   });
   publisher.onToolStarted(event);
-  await Promise.resolve();
-  await Promise.resolve();
+  await drainProgressQueue();
   await publisher.finish(new AbortController().signal);
   return visible;
 }
@@ -70,8 +70,7 @@ test("one progress message accumulates one compact English row per tool", async 
     callId: "web-1",
     input: { query: "Elden Ring VR mod" },
   });
-  await Promise.resolve();
-  await Promise.resolve();
+  await drainProgressQueue();
   publisher.onToolCompleted({
     toolName: "web_search",
     toolId: "hosted_web",
@@ -83,8 +82,7 @@ test("one progress message accumulates one compact English row per tool", async 
     callId: "web-2",
     input: { url: "https://user:secret@example.com/docs/page?token=private#fragment" },
   });
-  await Promise.resolve();
-  await Promise.resolve();
+  await drainProgressQueue();
   publisher.onToolCompleted({
     toolName: "web_fetch",
     toolId: "hosted_web",
@@ -100,15 +98,15 @@ test("one progress message accumulates one compact English row per tool", async 
   await Promise.resolve();
   await publisher.finish(new AbortController().signal);
 
-  assert.equal(texts[0], "⏳ web_search · Elden Ring VR mod");
+  assert.equal(texts[0], "⏳ web_search ×1 · Elden Ring VR mod");
   assert.equal(
     texts[1],
-    "✓ web_search · Elden Ring VR mod\n⏳ web_fetch · example.com/docs/page",
+    "✓ web_search ×1 · Elden Ring VR mod\n⏳ web_fetch ×1 · example.com/docs/page",
   );
   assert.equal(texts[1]?.split("\n").length, 2);
   assert.equal(
     texts[2],
-    "✓ web_search · Elden Ring VR mod\n✓ web_fetch · example.com/docs/page\n⏳ load_chat_skill · reply-style",
+    "✓ web_search ×1 · Elden Ring VR mod\n✓ web_fetch ×1 · example.com/docs/page\n⏳ load_chat_skill · reply-style",
   );
   assert.equal(texts[2]?.split("\n").length, 3);
   assert.doesNotMatch(texts[1] ?? "", /secret|token|private|fragment/u);
@@ -139,7 +137,7 @@ test("every visible tool argument is value-only with no redundant key prefix", a
     },
     {
       event: { toolName: "find_in_page", toolId: "hosted_web", callId: "6", input: { pattern: "cooling system" } },
-      expected: "⏳ find_in_page · cooling system",
+      expected: "⏳ find_in_page ×1 · cooling system",
     },
   ];
   for (const item of cases) {
@@ -152,3 +150,58 @@ test("every visible tool argument is value-only with no redundant key prefix", a
     assert.ok(Array.from(visible).length <= 48);
   }
 });
+
+test("hosted web batches aggregate, relabel, and fail without duplicate rows", async () => {
+  const texts: string[] = [];
+  const publisher = new ToolProgressPublisher({
+    turnId: 3,
+    workerId: "worker",
+    chatId: "-1001",
+    signal: new AbortController().signal,
+    botApi: {
+      async sendMessage(_chatId, text) {
+        texts.push(text);
+        return { ok: true, messageId: 3 };
+      },
+      async editMessageText(_chatId, _messageId, text) {
+        texts.push(text);
+        return { ok: true };
+      },
+      async deleteMessage() { return { ok: true }; },
+    },
+    store: {
+      saveBotTurnProgress() { return true; },
+      clearBotTurnProgress() { return true; },
+    },
+    minVisibleMs: 0,
+  });
+  const progress = new ResponsesTelegramProgress(publisher);
+
+  progress.startWeb({ itemId: "a", action: "search", batchSize: 3, input: { query: "first" } });
+  progress.startWeb({ itemId: "b", action: "search", input: { query: "second" } });
+  await drainProgressQueue();
+  assert.equal(texts.at(-1), "⏳ web_search ×4 · first");
+
+  // The first provider item is resolved after its initial generic lifecycle:
+  // move its entire batched count to `web_fetch`, not a third duplicate row.
+  progress.startWeb({ itemId: "a", action: "open_page", batchSize: 3, input: { url: "https://example.com/page" } });
+  await drainProgressQueue();
+  assert.equal(
+    texts.at(-1),
+    "⏳ web_fetch ×3 · example.com/page\n⏳ web_search ×1 · second",
+  );
+
+  progress.completeOutstanding(false);
+  await drainProgressQueue();
+  assert.equal(
+    texts.at(-1),
+    "✗ web_fetch ×3 · example.com/page\n✗ web_search ×1 · second",
+  );
+  await publisher.finish(new AbortController().signal);
+});
+
+async function drainProgressQueue(): Promise<void> {
+  for (let index = 0; index < 8; index += 1) {
+    await Promise.resolve();
+  }
+}

@@ -50,11 +50,13 @@ output items together with `function_call_output`, never a
 `causal-rag/` creates a bounded untrusted context packet from reply/recent
 messages, local BGE-M3 hybrid retrieval and day digests. Timeout/degradation
 means bounded recent context, not external retrieval. One temporary progress
-message accumulates one short English row per tool call with an allowlisted
-value only: bounded query text, URL host/path, find pattern, date/range,
+message accumulates compact English tool rows with an allowlisted value only:
+bounded query text, URL host/path, find pattern, date/range,
 message id or skill name, without argument-key prefixes. URL
 credentials/query/hash, arbitrary arguments, model
-reasoning and tool results stay hidden. The message is edited and removed before the
+reasoning and tool results stay hidden. Hosted rows include `×N`, combining
+parallel items of the same action and native multi-query search batches. The
+message is edited and removed before the
 final native rich Markdown reply; if Telegram cannot confirm deletion, its exact message id
 remains a terminal durable fence and is retried at a bounded cadence without
 blocking the final reply. Web citations are rendered as safe clickable links.

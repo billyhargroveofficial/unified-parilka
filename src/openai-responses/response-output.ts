@@ -23,15 +23,18 @@ export function webSearchItem(item: ResponseOutputItem): {
   callId: string;
   action?: ResponsesWebAction;
   input?: ResponsesWebProgressInput;
+  batchSize?: number;
   ok: boolean;
 } | undefined {
   if (item.type !== "web_search_call" || typeof item.id !== "string") return undefined;
   const action = recordAction(item.action);
   const input = webProgressInput(item.action);
+  const batchSize = webActionBatchSize(item.action);
   return {
     callId: item.id,
     ...(action === undefined ? {} : { action }),
     ...(input === undefined ? {} : { input }),
+    ...(batchSize === undefined ? {} : { batchSize }),
     ok: item.status === "completed",
   };
 }
@@ -43,8 +46,9 @@ export function hasHostedWebSearchCall(items: readonly ResponseOutputItem[]): bo
 export function webProgressFingerprint(
   action: ResponsesWebAction,
   input: ResponsesWebProgressInput | undefined,
+  batchSize?: number,
 ): string {
-  return JSON.stringify([action, input?.query, input?.url, input?.pattern]);
+  return JSON.stringify([action, input?.query, input?.url, input?.pattern, batchSize]);
 }
 
 export function citationsFrom(response: Response): readonly ResponsesCitation[] {
@@ -120,10 +124,10 @@ function webProgressInput(value: unknown): ResponsesWebProgressInput | undefined
   };
   if (action.type === "search") {
     const queries = Array.isArray(action.queries)
-      ? action.queries.filter((query): query is string => typeof query === "string")
+      ? action.queries.filter((query): query is string => typeof query === "string" && query.trim().length > 0)
       : [];
     const legacy = typeof action.query === "string" ? [action.query] : [];
-    const query = boundedProgressText([...queries, ...legacy].join(" / "), 512);
+    const query = boundedProgressText((queries.length > 0 ? queries : legacy).join(" / "), 512);
     return query === undefined ? undefined : { query };
   }
   if (action.type === "open_page") {
@@ -140,6 +144,21 @@ function webProgressInput(value: unknown): ResponsesWebProgressInput | undefined
     };
   }
   return undefined;
+}
+
+/**
+ * One hosted `search` item can contain a provider-side query batch. Preserve
+ * only its bounded cardinality for the transient UI, never raw extra fields.
+ */
+function webActionBatchSize(value: unknown): number | undefined {
+  if (value === null || typeof value !== "object") return undefined;
+  const action = value as { type?: unknown; queries?: unknown; query?: unknown };
+  if (action.type !== "search") return undefined;
+  const queryCount = Array.isArray(action.queries)
+    ? action.queries.filter((query): query is string => typeof query === "string" && query.trim().length > 0).length
+    : 0;
+  if (queryCount > 0) return queryCount;
+  return typeof action.query === "string" && action.query.trim().length > 0 ? 1 : undefined;
 }
 
 function boundedProgressText(value: unknown, maximum: number): string | undefined {
