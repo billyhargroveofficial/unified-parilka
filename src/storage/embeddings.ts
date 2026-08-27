@@ -260,6 +260,12 @@ declare protected assertMaintenanceJobReady: (
     beforeId?: number;
     afterId?: number;
     includeDirty?: boolean;
+    /**
+     * Dense retrieval first ranks vector rows without their membership table,
+     * then hydrates only the leading candidates.  Keep the historical default
+     * for all other callers, which receive complete chunks.
+     */
+    hydrateMessageIds?: boolean;
     limit?: number;
   }): StoredEmbeddingChunk[] {
     const clauses = ["chat_id = ?", "embedding_namespace = ?", "embedding_model = ?"];
@@ -269,7 +275,10 @@ declare protected assertMaintenanceJobReady: (
       values.push(params.dimensions);
     }
     if (params.beforeId != null) {
-      clauses.push("start_message_id < ?");
+      // A causal vector search must not even score a chunk that contains the
+      // trigger (or a newer row).  Trimming memberships after scoring would
+      // still let future text influence dense ranking and rerank selection.
+      clauses.push("end_message_id < ?");
       values.push(params.beforeId);
     }
     if (params.afterId != null) {
@@ -291,13 +300,64 @@ declare protected assertMaintenanceJobReady: (
          ${limitClause}`,
       )
       .all(...toSqlValues(values)) as Record<string, unknown>[];
-    return rows.map((row) => {
-      const chunk = rowToEmbeddingChunk(row);
-      return { ...chunk, messageIds: this.getEmbeddingChunkMessageIdsLocked(chunk.id) };
+    const chunks = rows.map(rowToEmbeddingChunk);
+    if (params.hydrateMessageIds === false || chunks.length === 0) {
+      // `messageIds` deliberately stays empty until the retrieval owner asks
+      // for a bounded ranked batch through getEmbeddingChunkMessageIds.
+      return chunks;
+    }
+    const messageIdsByChunkId = this.getEmbeddingChunkMessageIds({
+      chunkIds: chunks.map((chunk) => chunk.id),
     });
+    return chunks.map((chunk) => ({
+      ...chunk,
+      messageIds: messageIdsByChunkId.get(chunk.id) ?? [],
+    }));
   }
 
+  /**
+   * Batch hydration primitive for already-ranked chunk rows.  It replaces the
+   * former one-query-per-chunk path and stays below SQLite's bind limit even
+   * when a bounded retrieval candidate set is large.
+   */
+  getEmbeddingChunkMessageIds(params: {
+    chunkIds: readonly number[];
+  }): Map<number, number[]> {
+    const chunkIds = [...new Set(params.chunkIds)].filter(
+      (chunkId) => Number.isSafeInteger(chunkId) && chunkId > 0,
+    );
+    const result = new Map<number, number[]>();
+    for (let offset = 0; offset < chunkIds.length; offset += EMBEDDING_MEMBERSHIP_BATCH) {
+      const batch = chunkIds.slice(offset, offset + EMBEDDING_MEMBERSHIP_BATCH);
+      const rows = this.db
+        .prepare(
+          `SELECT chunk_id, message_id
+           FROM message_embedding_chunk_messages
+           WHERE chunk_id IN (${batch.map(() => "?").join(", ")})
+           ORDER BY chunk_id ASC, position ASC`,
+        )
+        .all(...toSqlValues(batch)) as Record<string, unknown>[];
+      for (const row of rows) {
+        const chunkId = Number(row.chunk_id);
+        const messageIds = result.get(chunkId) ?? [];
+        messageIds.push(Number(row.message_id));
+        result.set(chunkId, messageIds);
+      }
+    }
+    return result;
+  }
+
+  /** Lightweight per-turn metadata; full-corpus coverage remains diagnostic-only. */
+  getEmbeddingSearchStats(chatId: string, params: { namespace?: string } = {}): Array<Record<string, unknown>> {
+    return this.readEmbeddingStats(chatId, params);
+  }
+
+  /** Full diagnostic/indexing stats; interactive search must use the lightweight method. */
   getEmbeddingStats(chatId: string, params: { namespace?: string } = {}): Array<Record<string, unknown>> {
+    return this.readEmbeddingStats(chatId, params).map((row) => ({ ...row, ...this.getEmbeddingCoverageStats({ chatId, namespace: String(row.namespace), model: String(row.model), dimensions: Number(row.dimensions) }) }));
+  }
+
+  private readEmbeddingStats(chatId: string, params: { namespace?: string }): Array<Record<string, unknown>> {
     const clauses = ["chat_id = ?"];
     const values: unknown[] = [chatId];
     if (params.namespace != null) {
@@ -322,15 +382,7 @@ declare protected assertMaintenanceJobReady: (
          ORDER BY updated_at DESC`,
       )
       .all(...toSqlValues(values)) as Record<string, unknown>[];
-    return rows.map((row) => ({
-      ...row,
-      ...this.getEmbeddingCoverageStats({
-        chatId,
-        namespace: String(row.namespace),
-        model: String(row.model),
-        dimensions: Number(row.dimensions),
-      }),
-    }));
+    return rows;
   }
 
   getEmbeddingCoverageStats(params: {
@@ -528,6 +580,9 @@ declare protected assertMaintenanceJobReady: (
   }
 }
 
+/** Leave headroom for the surrounding query and SQLite's usual 999 binds. */
+const EMBEDDING_MEMBERSHIP_BATCH = 500;
+
 function validateEmbeddingCommitBatch(
   chunks: readonly EmbeddingChunkVector[],
 ): void {
@@ -635,7 +690,9 @@ export type EmbeddingApi = Pick<
   | "deleteDirtyEmbeddingChunks"
   | "deleteDirtyEmbeddingChunksForRanges"
   | "deleteDirtyEmbeddingChunksForMessages"
+  | "getEmbeddingChunkMessageIds"
   | "getEmbeddingChunks"
+  | "getEmbeddingSearchStats"
   | "getEmbeddingStats"
   | "getEmbeddingCoverageStats"
 >;

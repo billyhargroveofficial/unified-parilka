@@ -1,58 +1,45 @@
-/** A media kind that can safely be downloaded from a Bot API message. */
-export type TelegramMediaKind = "photo" | "voice" | "video_note" | "audio";
-
 /**
- * A deliberately small, transport-specific reference. It is internal-only:
- * never put a file id or a Bot API download path into a model prompt, log, or
- * user-visible error.
+ * A Bot API file reference is host-private. It must never cross into the
+ * model input, a user-visible error, or a structured log.
  */
-export interface TelegramMediaReference {
-  kind: TelegramMediaKind;
-  fileId: string;
-  /** MIME hint from Bot API, or a conservative kind-derived fallback. */
-  mediaType: string;
-  fileSize?: number;
-  durationSeconds?: number;
-  mimeType?: string;
-  width?: number;
-  height?: number;
+export interface TelegramImageReference {
+  readonly kind: "photo" | "document";
+  readonly fileId: string;
+  readonly mediaType: "image/jpeg" | "image/png" | "image/webp" | "image/gif";
+  readonly fileSize?: number;
+  readonly width?: number;
+  readonly height?: number;
 }
 
-export interface TelegramMediaTarget extends TelegramMediaReference {
-  source: TelegramMediaSource;
-  message: import("../../store.js").StoredMessage;
+export type TelegramImageSource = "trigger" | "reply";
+
+export interface TelegramImageTarget extends TelegramImageReference {
+  readonly source: TelegramImageSource;
+  readonly message: import("../../store.js").StoredMessage;
 }
 
-export type TelegramMediaSource = "trigger" | "reply";
-
-export interface SelectedTelegramMedia {
-  source: TelegramMediaSource;
-  messageId: number;
-  media: TelegramMediaReference;
+export interface TelegramImageDataUrl {
+  /** Ready for direct Responses `input_image`. */
+  readonly dataUrl: string;
+  readonly mimeType: TelegramImageReference["mediaType"];
+  readonly source: TelegramImageSource;
+  readonly messageId: number;
 }
 
-export type MediaFailureCode =
+export type ImageMediaFailureCode =
   | "invalid_media"
   | "file_too_large"
   | "download_failed"
   | "download_timeout"
-  | "aborted"
-  | "conversion_failed"
-  | "conversion_timeout"
-  | "no_audio"
-  | "transcription_failed"
-  | "transcription_timeout"
-  | "transcription_rejected"
-  | "transcription_unavailable"
-  | "invalid_transcription";
+  | "aborted";
 
-/** Safe, intentionally non-diagnostic failure for media operations. */
-export class BotMediaError extends Error {
-  readonly code: MediaFailureCode;
+/** Deliberately content-free media failure; never include Telegram identifiers. */
+export class BotImageMediaError extends Error {
+  readonly code: ImageMediaFailureCode;
 
-  constructor(code: MediaFailureCode, message: string) {
-    super(message);
-    this.name = "BotMediaError";
+  constructor(code: ImageMediaFailureCode) {
+    super(code);
+    this.name = "BotImageMediaError";
     this.code = code;
   }
 }

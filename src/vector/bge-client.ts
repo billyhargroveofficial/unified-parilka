@@ -1,4 +1,4 @@
-import type { AppConfig } from "../config.js";
+import type { EmbeddingRuntimeConfig } from "../embeddings.js";
 import { ToolError } from "../errors.js";
 import {
   MAX_SPARSE_QUERY_TERMS,
@@ -51,7 +51,7 @@ export type BgeHealthStatus = {
  * no Authorization header and no secret can leak into this transport.
  */
 export class LocalBgeM3Client {
-  constructor(private readonly config: AppConfig) {}
+  constructor(private readonly config: EmbeddingRuntimeConfig) {}
 
   get isConfigured(): boolean {
     const embeddings = this.config.embeddings;

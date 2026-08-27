@@ -14,7 +14,7 @@ import {
   storeCache,
 } from "./support/bot-read-tools.js";
 
-test("the direct registry preserves the nine useful read-tool contracts", () => {
+test("the direct registry preserves the five cache read-tool contracts", () => {
   const names: readonly string[] = BOT_READ_TOOL_DEFINITIONS.map(
     ({ name }) => name,
   );
@@ -26,14 +26,8 @@ test("the direct registry preserves the nine useful read-tool contracts", () => 
       "read_chat_slice",
       "day_digest",
       "thread_context",
-      "web_search",
-      "static_page_fetch",
-      "paper_search",
-      "research_lookup",
     ],
   );
-  assert.ok(names.includes("static_page_fetch"));
-  assert.ok(!names.includes("web_fetch"));
   for (const definition of BOT_READ_TOOL_DEFINITIONS) {
     assert.equal(definition.inputSchema.additionalProperties, false);
   }
@@ -60,16 +54,9 @@ test("rag_bm25_search reads MessageStore locally and emits attributable evidence
       text: "другое сообщение",
     },
   ]);
-  let webCalls = 0;
   const tools = new BotReadTools({
     chatId: CHAT.chatId,
     cache: storeCache(store),
-    webSearch: {
-      async search() {
-        webCalls += 1;
-        throw new Error("must not be called by SQLite tools");
-      },
-    },
   });
 
   const result = await tools.callTool("rag_bm25_search", {
@@ -102,7 +89,6 @@ test("rag_bm25_search reads MessageStore locally and emits attributable evidence
       text: "needle про архитектуру",
     },
   ]);
-  assert.equal(webCalls, 0);
 });
 
 test("rag_bm25_search accepts an async hybrid adapter and reports degraded channels", async () => {
@@ -326,11 +312,6 @@ test("empty cache is a successful empty result for all SQLite tools", async () =
   const tools = new BotReadTools({
     chatId: CHAT.chatId,
     cache: emptyCache(),
-    webSearch: {
-      async search() {
-        throw new Error("SQLite tools must not make network calls");
-      },
-    },
   });
 
   const results = await Promise.all([

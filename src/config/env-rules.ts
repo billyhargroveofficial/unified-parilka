@@ -271,5 +271,4 @@ export const BOOLEAN_ENV_RULES = {
     fallback: false,
   },
   TELEGRAM_EMBEDDINGS_ENABLED: { fallback: false },
-  PARILKA_HERMES_PROJECTION_ENABLED: { fallback: false },
 } as const satisfies Record<string, BooleanEnvRule>;

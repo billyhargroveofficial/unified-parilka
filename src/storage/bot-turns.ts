@@ -376,6 +376,59 @@ declare protected getBotUpdateLocked: (
     });
   }
 
+  /**
+   * Returns one terminal turn whose presentation-only progress bubble still
+   * needs deletion. The durable message id is retained until the Bot API
+   * confirms cleanup, including after a final reply was already delivered.
+   */
+  getNextBotTurnProgressCleanup(chatId: string): StoredBotTurn | undefined {
+    const normalizedChatId = chatId.trim();
+    assertNonEmptyBounded(normalizedChatId, 256, "chatId");
+    const row = this.db
+      .prepare(
+        `SELECT id
+         FROM bot_turns
+         WHERE chat_id = ?
+           AND progress_message_id IS NOT NULL
+           AND status IN ('sent', 'skipped', 'lost_ack', 'dead_letter')
+         ORDER BY updated_at_ms ASC, id ASC
+         LIMIT 1`,
+      )
+      .get(normalizedChatId) as Record<string, unknown> | undefined;
+    return row === undefined ? undefined : this.getBotTurnLocked(Number(row.id));
+  }
+
+  /**
+   * Clears only the exact persisted progress fence selected for cleanup.
+   * Matching the message id prevents a stale cleaner from erasing a newer
+   * presentation message should terminal-state handling ever be extended.
+   */
+  clearTerminalBotTurnProgressIfMatches(
+    turnId: number,
+    messageId: number,
+    nowMs = Date.now(),
+  ): boolean {
+    assertBotTurnId(turnId);
+    if (!Number.isSafeInteger(messageId) || messageId < 1) {
+      throw new Error("progress messageId must be a positive safe integer.");
+    }
+    assertTimestamp(nowMs, "nowMs");
+    return this.immediateTransaction("clearTerminalBotTurnProgressIfMatches", () => {
+      const result = this.db
+        .prepare(
+          `UPDATE bot_turns
+           SET progress_message_id = NULL, progress_state = NULL, updated_at_ms = ?
+           WHERE id = ? AND progress_message_id = ?
+             AND status IN ('sent', 'skipped', 'lost_ack', 'dead_letter')`,
+        )
+        .run(nowMs, turnId, messageId);
+      if (result.changes > 0) {
+        this.syncBotUpdateFromTurnLocked(turnId, nowMs);
+      }
+      return result.changes > 0;
+    });
+  }
+
   getBotTurn(turnId: number): StoredBotTurn | undefined {
     assertBotTurnId(turnId);
     return this.getBotTurnLocked(turnId);
@@ -593,6 +646,8 @@ export type BotTurnApi = Pick<
   | "markBotTurnFailed"
   | "saveBotTurnProgress"
   | "clearBotTurnProgress"
+  | "getNextBotTurnProgressCleanup"
+  | "clearTerminalBotTurnProgressIfMatches"
   | "getBotTurn"
   | "getBotTurnByTrigger"
   | "queryBotTurns"

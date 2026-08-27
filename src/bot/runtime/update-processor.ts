@@ -1,6 +1,7 @@
 import { normalizeTelegramUpdate } from "../telegram-update.js";
 import { boundedInteger, BotRuntimeProtocolError, compact, durableMessageId, safeMachineCode, stringifyUpdate, updateIdentifier } from "./helpers.js";
 import type { BotRuntimeStore, BotUpdateProcessingResult, BotUpdateProcessorOptions, BotWorkNotifier } from "./contracts.js";
+import type { TypingLeaseManager } from "../typing.js";
 import type { TurnCoordinator } from "../turn-coordinator.js";
 import type { TelegramUpdateOptions } from "../telegram-update.js";
 import type { JsonEventLogger } from "../worker.js";
@@ -12,6 +13,7 @@ export class BotUpdateProcessor {
   readonly #store: BotRuntimeStore;
   readonly #coordinator: TurnCoordinator;
   readonly #workNotifier: BotWorkNotifier;
+  readonly #typingLeases: Pick<TypingLeaseManager, "enqueue"> | undefined;
   readonly #telegram: TelegramUpdateOptions;
   readonly #triggerCooldownMs: number;
   readonly #updateMaxAttempts: number;
@@ -22,6 +24,7 @@ export class BotUpdateProcessor {
     this.#store = options.store;
     this.#coordinator = options.coordinator;
     this.#workNotifier = options.workNotifier;
+    this.#typingLeases = options.typingLeases;
     this.#telegram = options.telegram;
     this.#triggerCooldownMs = boundedInteger(
       options.triggerCooldownMs ?? 5_000,
@@ -61,6 +64,7 @@ export class BotUpdateProcessor {
             )
           : undefined;
       if (turn?.status === "queued" || turn?.status === "failed") {
+        this.#startQueuedTyping(turn);
         this.#workNotifier.notify();
       }
       this.#log("info", "bot.update.duplicate_ack", {
@@ -146,6 +150,7 @@ export class BotUpdateProcessor {
       result.turn?.status === "queued" ||
       result.turn?.status === "failed"
     ) {
+      this.#startQueuedTyping(result.turn);
       this.#workNotifier.notify();
     }
     this.#log(
@@ -171,6 +176,16 @@ export class BotUpdateProcessor {
         result.throttled === undefined,
       routed,
     };
+  }
+
+  #startQueuedTyping(
+    turn: NonNullable<ReturnType<BotRuntimeStore["getBotTurnByTrigger"]>>,
+  ): void {
+    try {
+      this.#typingLeases?.enqueue({ turnId: turn.id, chatId: turn.chatId });
+    } catch {
+      // UI feedback is intentionally outside durable update acknowledgement.
+    }
   }
 
   #recordPoison(

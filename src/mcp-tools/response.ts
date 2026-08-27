@@ -14,11 +14,11 @@ export function jsonTool(payload: unknown): ToolContent {
  * MCP envelope for the five cache-only bot-read tools. Boundary failures —
  * a missing/invalid `source_message_id` (rejected by the registry before
  * this point) or invalid tool arguments — keep MCP `isError` via `jsonTool`.
- * Typed operational BotRead failures (`cache_error`, `provider_unavailable`,
- * `provider_error`, `timeout`, `aborted`) are the deliberate
+ * Typed operational BotRead failures (`cache_error`, `timeout`, `aborted`)
+ * are the deliberate
  * exception: they stay a normal successful MCP response carrying the
- * `{ok:false, tool, error:{code…}, evidence:[]}` envelope, so Hermes reads a
- * structured error instead of an opaque protocol error.
+ * `{ok:false, tool, error:{code…}, evidence:[]}` envelope, so the model host
+ * reads a structured error instead of an opaque protocol error.
  */
 export function jsonCacheReadResult(payload: BotReadToolResult): ToolContent {
   if (!payload.ok && isBoundaryFailure(payload)) {

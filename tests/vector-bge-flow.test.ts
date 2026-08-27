@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { test, type TestContext } from "node:test";
 import { CanonicalBotReadCache } from "../src/bot/read-cache.js";
 import { LOCAL_BGE_M3_DIMENSIONS } from "../src/config/types.js";
+import { localBgeM3Namespace, vectorToBlob } from "../src/embeddings.js";
 import type { StoredMessage } from "../src/store.js";
 import { MessageStore } from "../src/store.js";
 import type { ChatInfo } from "../src/telegram-client.js";
@@ -287,6 +288,109 @@ test("rag_bm25_search cache fuses three channels and reranks top-K", async (t) =
     1,
     "rerank must move the marker message to the front",
   );
+});
+
+test("causal beforeId excludes crossing chunks before dense/sparse scoring, fusion, and rerank", async (t) => {
+  const service = await startFakeBgeService();
+  t.after(() => service.close());
+  const store = fixtureStore(t);
+  store.upsertMessages(CHAT, [
+    message(1, "safe alpha needle"),
+    message(2, "safe beta needle"),
+    message(3, "crossing pretrigger probe"),
+    message(4, "crossing pretrigger continuation"),
+    message(5, "trigger only needle"),
+  ]);
+  const config = localRagConfig(service.origin);
+  const namespace = localBgeM3Namespace(
+    "bge-m3",
+    LOCAL_BGE_M3_DIMENSIONS,
+  );
+  // The third chunk starts before the causal boundary but its vector and
+  // sparse postings include the trigger. It must never become a candidate.
+  store.upsertEmbeddingChunks([
+    chunk(1, 1, "safe alpha needle"),
+    chunk(2, 2, "safe beta needle"),
+    chunk(3, 5, "crossing pretrigger probe\ntrigger only needle"),
+  ]);
+  const rag = new VectorRag(config, store);
+
+  const direct = await rag.search({
+    chatId: CHAT.chatId,
+    query: "needle",
+    beforeId: 5,
+    limit: 8,
+    includeMessages: true,
+  });
+  assert.equal(direct.candidateCount, 2, "crossing dense BLOB must not be scored");
+  assert.equal(direct.sparseCandidateCount, 2, "crossing sparse postings must not be scored");
+  assert.deepEqual(
+    direct.hits.map((hit) => hit.chunk.id),
+    [1, 2],
+  );
+  assert.deepEqual(
+    direct.sparseHits.map((hit) => hit.chunk.id),
+    [1, 2],
+  );
+
+  let rerankCandidates: string[] | undefined;
+  const cache = new CanonicalBotReadCache({
+    store,
+    vector: {
+      supportsSparse: rag.supportsSparse,
+      search: rag.search.bind(rag),
+      fuseChannels: rag.fuseChannels.bind(rag),
+      async rerank({ candidates }) {
+        rerankCandidates = [...candidates];
+        return {
+          available: true,
+          scores: candidates.map((_, index) => candidates.length - index),
+        };
+      },
+    },
+    rerankMaxCandidates: 8,
+  });
+  const fused = await cache.search({
+    chatId: CHAT.chatId,
+    query: "needle",
+    beforeId: 5,
+    limit: 8,
+    signal: new AbortController().signal,
+  });
+  assert.equal(fused.channels?.rerank, "ok");
+  assert.deepEqual(
+    fused.messages.map((item) => item.messageId),
+    [1, 2],
+  );
+  assert.deepEqual(rerankCandidates, ["safe alpha needle", "safe beta needle"]);
+
+  function chunk(
+    startMessageId: number,
+    endMessageId: number,
+    text: string,
+  ) {
+    const messageIds = Array.from(
+      { length: endMessageId - startMessageId + 1 },
+      (_, index) => startMessageId + index,
+    );
+    return {
+      chatId: CHAT.chatId,
+      startMessageId,
+      endMessageId,
+      messageIds,
+      messageCount: messageIds.length,
+      text,
+      namespace,
+      model: "bge-m3",
+      dimensions: LOCAL_BGE_M3_DIMENSIONS,
+      embedding: vectorToBlob(denseOf(text)),
+      contentHash: `causal-${startMessageId}-${endMessageId}`,
+      sparseTerms: sparseOf(text).map(({ token_id, weight }) => ({
+        tokenId: token_id,
+        weight,
+      })),
+    };
+  }
 });
 
 test("rerank failure keeps first-stage order and reports degradation", async (t) => {

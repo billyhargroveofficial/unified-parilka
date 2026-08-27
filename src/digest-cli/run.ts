@@ -3,19 +3,31 @@ import {
   existsSync,
 } from "node:fs";
 import {
-  AiSdkSummaryPort,
+  SummaryTextPort,
   acquireDigestProcessLock,
   runDigestGeneration,
   DIGEST_STALE_MESSAGE_THRESHOLD,
   DIGEST_TIME_ZONE,
   type DigestGenerationReport,
-  type DigestModelRouter,
   type DigestPhaseReport,
   type DigestProcessLock,
 } from "../digests.js";
+import type { SummaryTextRunner } from "../digest/summary-text-port.js";
+import type { DreamTextRunner } from "../dream/text-runner.js";
+import {
+  CodexSubscriptionAuthStore,
+  CodexSubscriptionResponsesTransport,
+  OpenAiResponsesTurnClient,
+} from "../openai-responses/index.js";
+import {
+  OpenAiResponsesMaintenanceClientAdapter,
+} from "../openai-responses/maintenance-client.js";
+import {
+  ResponsesDigestTextRunner,
+  ResponsesDreamRunner,
+} from "../openai-responses/maintenance.js";
 import type { JsonEventLogger } from "../observability/contracts.js";
 import { createLogger } from "../observability/logger.js";
-import { ModelRouter } from "../providers/model-router.js";
 import { MessageStore } from "../store.js";
 import { runDreamPass } from "./dream-pass.js";
 import {
@@ -24,9 +36,18 @@ import {
   CliConfigError,
 } from "./options.js";
 
+export interface DigestMaintenanceRunners {
+  readonly summary: SummaryTextRunner;
+  readonly dream: DreamTextRunner;
+}
+
 /** Optional DI for tests; production main wires createLogger({ service: "cli" }). */
 export interface RunDigestCliDeps {
   logger?: JsonEventLogger;
+  /** Test seam. Production constructs a direct Responses maintenance packet. */
+  createResponsesRunner?: (
+    options: NonNullable<CliOptions["responses"]>,
+  ) => DigestMaintenanceRunners;
 }
 
 export async function runDigestCli(
@@ -55,12 +76,15 @@ export async function runDigestCli(
     store = new MessageStore(options.dbPath, {
       readOnly: !options.apply,
     });
-    const router: DigestModelRouter | undefined =
-      options.apply && options.modelConfigPath
-        ? ModelRouter.fromFile(options.modelConfigPath)
-        : undefined;
-    const summaryPort = router && !options.dreamOnly
-      ? new AiSdkSummaryPort(router, {
+    // Construct the subscription transport only in apply mode, after database
+    // preflight and locking. Dry-run deliberately does not open OAuth state.
+    const maintenanceRunners = options.apply
+      ? (deps.createResponsesRunner ?? createResponsesMaintenanceRunners)(
+          options.responses!,
+        )
+      : undefined;
+    const summaryPort = maintenanceRunners && !options.dreamOnly
+      ? new SummaryTextPort(maintenanceRunners.summary, {
           maxOutputTokens: 2_048,
           totalTimeoutMs: options.modelTotalTimeoutMs,
           candidateTimeoutMs: options.modelCandidateTimeoutMs,
@@ -91,12 +115,11 @@ export async function runDigestCli(
         chatId: options.chatId,
         apply: options.apply,
         botId: options.botId,
-        modelConfigPath: options.modelConfigPath,
         modelTotalTimeoutMs: options.modelTotalTimeoutMs,
         modelCandidateTimeoutMs: options.modelCandidateTimeoutMs,
         memoryMaxChars: options.memoryMaxChars,
       },
-      router,
+      maintenanceRunners?.dream,
       deps.logger,
     );
     const reportOutput = options.summaryOnly
@@ -134,6 +157,19 @@ export async function runDigestCli(
     store?.close();
     lock?.release();
   }
+}
+
+function createResponsesMaintenanceRunners(
+  options: NonNullable<CliOptions["responses"]>,
+): DigestMaintenanceRunners {
+  const auth = new CodexSubscriptionAuthStore({ authFile: options.authFile });
+  const transport = new CodexSubscriptionResponsesTransport({ auth });
+  const turnClient = new OpenAiResponsesTurnClient(transport);
+  const maintenanceClient = new OpenAiResponsesMaintenanceClientAdapter(turnClient);
+  return {
+    summary: new ResponsesDigestTextRunner(maintenanceClient),
+    dream: new ResponsesDreamRunner(maintenanceClient),
+  };
 }
 
 function emptyDigestReport(

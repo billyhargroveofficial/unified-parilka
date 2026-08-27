@@ -1,5 +1,5 @@
 export const MIN_SUPPORTED_SCHEMA_VERSION = 11;
-export const MAX_SUPPORTED_SCHEMA_VERSION = 22;
+export const MAX_SUPPORTED_SCHEMA_VERSION = 23;
 export const FTS_REBUILD_JOB = "messages_fts_rebuild";
 export const EMBEDDING_MEMBERSHIP_JOB =
   "embedding_chunk_membership_backfill";

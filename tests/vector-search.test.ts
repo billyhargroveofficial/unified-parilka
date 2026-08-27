@@ -3,6 +3,7 @@ import { test } from "node:test";
 import {
   blobToVector,
   cosineSimilarity,
+  createBlobCosineScorer,
   embeddingNamespace,
   localBgeM3Namespace,
   vectorToBlob,
@@ -36,6 +37,44 @@ test("vector decoding rejects corrupt blob sizes, dimensions, and values", () =>
   assert.throws(
     () => cosineSimilarity([1], [1, 0]),
     /same dimensions/u,
+  );
+});
+
+test("blob cosine scorer validates candidates in one pass without caching a stale vector", () => {
+  const query = [1, 0];
+  const scoreBlob = createBlobCosineScorer(query);
+  const blob = vectorToBlob([1, 0]);
+  assert.equal(scoreBlob(blob, 2), 1);
+
+  // A post-construction mutation cannot bypass the finite-query validation.
+  query[0] = Number.NaN;
+  assert.equal(scoreBlob(blob, 2), 1);
+
+  // The scorer owns only the validated query. It must observe the BLOB passed
+  // to each call directly, rather than retaining a materialized candidate.
+  blob.writeFloatLE(0, 0);
+  blob.writeFloatLE(1, 4);
+  assert.equal(scoreBlob(blob, 2), 0);
+
+  const unaligned = new Uint8Array(new ArrayBuffer(9), 1, 8);
+  unaligned.set(blob);
+  assert.equal(scoreBlob(unaligned, 2), 0, "unaligned BLOB uses the portable reader");
+
+  assert.throws(
+    () => scoreBlob(new Uint8Array([1, 2, 3]), 2),
+    /byte length must be divisible by 4/u,
+  );
+  assert.throws(
+    () => scoreBlob(vectorToBlob([1]), 2),
+    /expected 2 dimensions but received 1/u,
+  );
+  const nonFinite = Buffer.alloc(8);
+  nonFinite.writeFloatLE(1, 0);
+  nonFinite.writeFloatLE(Number.NaN, 4);
+  assert.throws(() => scoreBlob(nonFinite, 2), /non-finite/u);
+  assert.throws(
+    () => createBlobCosineScorer([Number.NaN]),
+    /finite vector values/u,
   );
 });
 
@@ -438,60 +477,4 @@ test("local BGE-M3 dense cap exceeded but sparseAvailable true and sparseHits no
   assert.ok(result.sparseHits.length > 0, "sparse hits should be nonempty");
   assert.equal(result.sparseHits[0]?.chunk.dimensions, dimensions);
   assert.equal(result.backend, "local_bge_m3");
-});
-
-test("hybrid ranking merges overlapping keyword and vector evidence", () => {
-  const vectorRag = new VectorRag(config(), new MessageStore(":memory:"));
-  const lexicalOnly = { chatId: CHAT.chatId, messageId: 1, senderName: "alice", text: "lexical only" };
-  const overlap = { chatId: CHAT.chatId, messageId: 2, senderName: "bob", text: "shared evidence" };
-  const vectorOnly = { chatId: CHAT.chatId, messageId: 3, senderName: "carol", text: "vector only" };
-
-  const results = vectorRag.hybrid(
-    [
-      { message: lexicalOnly, rank: 0 },
-      { message: overlap, rank: 0 },
-    ],
-    [
-      {
-        rank: 1,
-        score: 0.99,
-        chunk: {
-          id: 20,
-          startMessageId: 2,
-          endMessageId: 2,
-          messageCount: 1,
-          messageIds: [2],
-          text: "shared evidence chunk",
-          namespace: namespace(),
-          model: config().embeddings.model,
-          dimensions: 2,
-        },
-        messages: [overlap],
-      },
-      {
-        rank: 2,
-        score: 0.98,
-        chunk: {
-          id: 30,
-          startMessageId: 3,
-          endMessageId: 3,
-          messageCount: 1,
-          messageIds: [3],
-          text: "vector only chunk",
-          namespace: namespace(),
-          model: config().embeddings.model,
-          dimensions: 2,
-        },
-        messages: [vectorOnly],
-      },
-    ],
-    10,
-  );
-
-  assert.equal(results[0]?.source, "hybrid");
-  assert.deepEqual(results[0]?.sources.sort(), ["keyword", "vector"]);
-  assert.equal(results[0]?.messageId, 2);
-  assert.equal(results.some((hit) => hit.source === "keyword" && hit.messageId === 1), true);
-  assert.equal(results.some((hit) => hit.source === "vector" && hit.startMessageId === 3), true);
-  assert.equal((results[0]?.score ?? 0) > (results[1]?.score ?? 0), true);
 });

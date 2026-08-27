@@ -406,6 +406,18 @@ declare protected applyMaintenanceSchema: () => void;
     );
   }
 
+  protected applyBotCodexSessionsMigration(): void {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS bot_codex_sessions (
+        chat_id TEXT PRIMARY KEY,
+        thread_id TEXT NOT NULL,
+        revision INTEGER NOT NULL DEFAULT 1 CHECK(revision >= 1),
+        created_at_ms INTEGER NOT NULL,
+        updated_at_ms INTEGER NOT NULL
+      );
+    `);
+  }
+
   protected applyBotChatMemoryMigration(): void {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS bot_chat_memory (

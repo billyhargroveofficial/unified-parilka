@@ -1,4 +1,4 @@
-import type { DigestModelRouter } from "../digests.js";
+import type { DreamTextRunner } from "../dream/text-runner.js";
 import { DreamConsolidator } from "../dream/consolidator.js";
 import type { JsonEventLogger } from "../observability/contracts.js";
 import type { MessageStore } from "../store.js";
@@ -7,7 +7,7 @@ import type { CliOptions } from "./options.js";
 export type DreamPassResult =
   | {
       status: "skipped";
-      reason: "dry_run" | "no_model_config";
+      reason: "dry_run" | "no_maintenance_runner";
     }
   | {
       status: "no_jobs";
@@ -35,7 +35,6 @@ export interface DreamPassOptions
     | "chatId"
     | "apply"
     | "botId"
-    | "modelConfigPath"
     | "modelTotalTimeoutMs"
     | "modelCandidateTimeoutMs"
     | "memoryMaxChars"
@@ -47,18 +46,18 @@ export interface DreamPassOptions
 export async function runDreamPass(
   store: MessageStore,
   options: DreamPassOptions,
-  router: DigestModelRouter | undefined,
+  dreamRunner: DreamTextRunner | undefined,
   logger?: JsonEventLogger,
 ): Promise<DreamPassResult> {
-  if (!options.apply || router === undefined) {
+  if (!options.apply || dreamRunner === undefined) {
     return {
       status: "skipped",
-      reason: options.apply ? "no_model_config" : "dry_run",
+      reason: options.apply ? "no_maintenance_runner" : "dry_run",
     };
   }
 
   const consolidator = new DreamConsolidator({
-    router,
+    textRunner: dreamRunner,
     botSenderId: options.botId,
     maxMemoryChars: options.memoryMaxChars,
     totalTimeoutMs: options.modelTotalTimeoutMs,

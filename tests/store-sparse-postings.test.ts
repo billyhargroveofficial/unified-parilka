@@ -90,11 +90,11 @@ function chunkInput(params: {
 test("fresh schema v21 creates sparse postings objects and is idempotent", (t) => {
   const dbPath = tempStorePath(t);
   const store = new MessageStore(dbPath);
-  assert.equal(store.getSchemaVersion(), 22);
+  assert.equal(store.getSchemaVersion(), 23);
   store.close();
   // Second open must be a no-op migration over identical objects.
   const reopened = new MessageStore(dbPath);
-  assert.equal(reopened.getSchemaVersion(), 22);
+  assert.equal(reopened.getSchemaVersion(), 23);
   reopened.close();
 });
 
@@ -120,7 +120,7 @@ test("temp-DB rehearsal migrates v20 to v21 idempotently", (t) => {
 
   const migrated = new MessageStore(dbPath);
   try {
-    assert.equal(migrated.getSchemaVersion(), 22);
+    assert.equal(migrated.getSchemaVersion(), 23);
     const db = new DatabaseSync(dbPath, { readOnly: true });
     try {
       const table = db
@@ -156,7 +156,7 @@ test("temp-DB rehearsal migrates v20 to v21 idempotently", (t) => {
 
   // Idempotent second migration pass.
   const again = new MessageStore(dbPath);
-  assert.equal(again.getSchemaVersion(), 22);
+    assert.equal(again.getSchemaVersion(), 23);
   again.close();
 });
 

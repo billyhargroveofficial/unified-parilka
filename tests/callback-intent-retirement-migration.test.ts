@@ -15,7 +15,7 @@ test("v16 and v18 databases converge on v20 without callback intent state", (t) 
   downgradeV16.close();
 
   const migratedV16 = new MessageStore(v16Path);
-  assert.equal(migratedV16.getSchemaVersion(), 22);
+  assert.equal(migratedV16.getSchemaVersion(), 23);
   migratedV16.close();
 
   const v18Path = tempDbPath(t);
@@ -30,7 +30,7 @@ test("v16 and v18 databases converge on v20 without callback intent state", (t) 
   downgradeV18.close();
 
   const migratedV18 = new MessageStore(v18Path);
-  assert.equal(migratedV18.getSchemaVersion(), 22);
+  assert.equal(migratedV18.getSchemaVersion(), 23);
   migratedV18.close();
 
   const inspect = new DatabaseSync(v18Path, { readOnly: true });

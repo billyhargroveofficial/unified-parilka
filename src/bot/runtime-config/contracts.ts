@@ -1,106 +1,51 @@
 export type BotRuntimeMode = "live" | "shadow";
 
-export interface BotWebSearchHttpRuntimeConfig {
-  kind: "http";
-  endpoint: string;
-  bearerToken?: string;
-}
-
-export interface BotWebSearchVertexRuntimeConfig {
-  kind: "vertex";
-  project: string;
-  model: string;
-  region: string;
-  maxOutputTokens: number;
-  systemInstruction: string;
-  gcloudPath?: string;
-}
-
-export type BotWebSearchRuntimeConfig =
-  | BotWebSearchHttpRuntimeConfig
-  | BotWebSearchVertexRuntimeConfig;
-
-export interface BotResearchGatewayRuntimeConfig {
-  socketPath: string;
-  timeoutMs: number;
-}
-
-/** Machine-local Flov endpoint used only for audio sent to this bot. */
-export interface BotAudioTranscribeRuntimeConfig {
-  endpoint: string;
-  timeoutMs: number;
-  /** Optional bearer credential for a locally hardened Flov API. */
-  bearerToken?: string;
-}
+/** Environment is deliberately narrow so tests can never inherit secrets. */
+export type BotRuntimeEnvironment = Readonly<Record<string, string | undefined>>;
 
 export interface BotRuntimeConfig {
-  token: string;
-  exclusivePollerConfirmed: true;
-  allowedChatId: string;
-  botId: string;
-  botUsername: string;
-  botDisplayName: string;
-  chatTitle: string;
-  historyDescription: string;
-  approximateMemberCount?: number;
-  /** Private allowlist of immutable Telegram user IDs permitted to write chat memory. */
-  memoryWriteAuthorizerIds: readonly string[];
-  dbPath: string;
-  modelConfigPath: string;
-  webSearch?: BotWebSearchRuntimeConfig;
-  researchGateway?: BotResearchGatewayRuntimeConfig;
-  audioTranscribe: BotAudioTranscribeRuntimeConfig;
-  /** Loopback SearXNG JSON API origin. Default http://127.0.0.1:8080. */
-  searxngEndpoint: string;
-  /** Loopback Firecrawl v2 API origin. Default http://127.0.0.1:3002. */
-  firecrawlEndpoint: string;
-  mode: BotRuntimeMode;
-  workerConcurrency: number;
-  triggerCooldownMs: number;
-  updateMaxAttempts: number;
-  initialOffset?: number;
-  pollTimeoutSec: number;
-  pollLimit: number;
-  pollBackoffInitialMs: number;
-  pollBackoffMaxMs: number;
-  modelStepTimeoutMs: number;
-  publishTimeoutMs: number;
-  shutdownTimeoutMs: number;
+  readonly token: string;
+  readonly allowedChatId: string;
+  readonly botId: string;
+  readonly botUsername: string;
+  readonly dbPath: string;
+  readonly mode: BotRuntimeMode;
+  readonly workerConcurrency: number;
+  readonly triggerCooldownMs: number;
+  readonly updateMaxAttempts: number;
+  readonly initialOffset?: number;
+  readonly pollTimeoutSec: number;
+  readonly pollLimit: number;
+  readonly pollBackoffInitialMs: number;
+  readonly pollBackoffMaxMs: number;
+  readonly publishTimeoutMs: number;
+  readonly shutdownTimeoutMs: number;
+  readonly responses: BotResponsesRuntimeConfig;
+  readonly rag: BotRagRuntimeConfig;
 }
 
-export type SafeBotRuntimeConfig = Omit<
-  BotRuntimeConfig,
-  | "token"
-  | "webSearch"
-  | "researchGateway"
-  | "audioTranscribe"
-  | "memoryWriteAuthorizerIds"
-> & {
-  tokenConfigured: true;
-  memoryWriteAuthorizerCount: number;
-  audioTranscribe: Omit<BotAudioTranscribeRuntimeConfig, "bearerToken"> & {
-    bearerTokenConfigured: boolean;
+/** Safe for journal output: it deliberately omits the Bot API token. */
+export interface SafeBotRuntimeConfig {
+  readonly allowedChatId: string;
+  readonly botId: string;
+  readonly botUsername: string;
+  readonly dbPath: string;
+  readonly mode: BotRuntimeMode;
+  readonly workerConcurrency: number;
+  readonly pollTimeoutSec: number;
+  readonly pollLimit: number;
+  readonly responses: SafeBotResponsesRuntimeConfig;
+  readonly rag: {
+    readonly backend: "local_bge_m3";
+    readonly localEndpoint: string;
+    readonly localRequestTimeoutMs: number;
+    readonly rerankTimeoutMs: number;
+    readonly rerankMaxCandidates: number;
+    readonly automaticTimeoutMs: number;
   };
-  webSearch?:
-    | {
-        kind: "http";
-        endpoint: string;
-        bearerTokenConfigured: boolean;
-      }
-    | {
-        kind: "vertex";
-        project: string;
-        model: string;
-        region: string;
-        maxOutputTokens: number;
-        gcloudPathConfigured: boolean;
-      };
-  researchGateway?: {
-    configured: true;
-    timeoutMs: number;
-  };
-};
-
-export type BotRuntimeEnvironment = Readonly<
-  Record<string, string | undefined>
->;
+}
+import type {
+  BotResponsesRuntimeConfig,
+  SafeBotResponsesRuntimeConfig,
+} from "../responses/runtime-config.js";
+import type { BotRagRuntimeConfig } from "../responses/rag-runtime-config.js";

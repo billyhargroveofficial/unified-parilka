@@ -1,19 +1,20 @@
 import type {
   MessageStore,
   StoredBotTurn,
-  StoredChatLesson,
-  StoredChatSkill,
-  StoredFastChatMemory,
-  StoredMessage,
 } from "../../store.js";
-import type { FoldBatch, TurnBoundary, TurnCoordinator } from "../turn-coordinator.js";
+import type { TurnCoordinator } from "../turn-coordinator.js";
+import type {
+  BotAgentFinalResult,
+  BotAgentRequest,
+  BotTurnAgent,
+} from "../agent-contract.js";
 import type { TelegramPublication } from "../telegram-publication.js";
 import type {
   ToolProgressBotApiPort,
   ToolProgressPort,
 } from "../tool-progress.js";
-import type { TurnTelemetry } from "../telemetry.js";
 import type { TypingPort } from "../typing.js";
+import type { TypingLeaseManager } from "../typing.js";
 
 export const BOT_CONTEXT_MESSAGES = 60;
 export const BOT_REPLAY_MESSAGES = 100;
@@ -21,41 +22,9 @@ export const BOT_REPLAY_MESSAGES = 100;
 export const DEFAULT_LEASE_MS = 30_000;
 export const DEFAULT_HEARTBEAT_MS = 10_000;
 export const DEFAULT_PUBLISH_TIMEOUT_MS = 30_000;
-export interface BotAgentFinalResult {
-  kind: "final";
-  text: string;
-  telemetry: TurnTelemetry;
-  /**
-   * An explicit local Flov transcription is sent as bounded plain text rather
-   * than being sent through the native rich-message endpoint.
-   */
-  responseOrigin?: "local_audio";
-}
-
-export interface BotAgentRequest {
-  turn: Readonly<StoredBotTurn>;
-  trigger: Readonly<StoredMessage>;
-  /**
-   * The exact message explicitly replied to by the trigger, if it is present
-   * in the same durable chat. This is deliberately not general history: media
-   * handling may inspect only the addressed message.
-   */
-  replyTarget?: Readonly<StoredMessage>;
-  context: readonly Readonly<StoredMessage>[];
-  signal: AbortSignal;
-  drainFold: (boundary: TurnBoundary) => FoldBatch;
-  toolProgressPort?: ToolProgressPort;
-  memoryBlock?: string;
-  fastMemory?: readonly StoredFastChatMemory[];
-  longTermLessons?: readonly StoredChatLesson[];
-  chatSkills?: readonly StoredChatSkill[];
-  /** Durable sender id of this bot's own published messages. */
-  botSenderId?: string;
-}
-
-export interface BotTurnAgent {
-  run(request: BotAgentRequest): Promise<BotAgentFinalResult>;
-}
+/** Terminal presentation cleanup is best-effort and must never busy-loop. */
+export const PROGRESS_CLEANUP_RETRY_MS = 5_000;
+export type { BotAgentFinalResult, BotAgentRequest, BotTurnAgent };
 
 export interface TelegramPublishRequest {
   chatId: string;
@@ -112,13 +81,13 @@ export interface BotTurnWorkerOptions {
   heartbeatMs?: number;
   publishTimeoutMs?: number;
   typingPort?: TypingPort;
+  /** Queue-level ownership keeps native typing alive before this worker claims. */
+  typingLeases?: Pick<TypingLeaseManager, "claim" | "release">;
   typingIntervalMs?: number;
   toolProgressBotApiPort?: ToolProgressBotApiPort;
   logger?: JsonEventLogger;
   scheduler?: WorkerScheduler;
   now?: () => number;
-  /** Durable sender id of this bot's own published messages. */
-  botSenderId?: string;
 }
 
 export type BotTurnWorkerResult =
@@ -138,4 +107,5 @@ export type BotTurnWorkerResult =
       retryable: boolean;
       retryAfterMs?: number;
     }
-  | { status: "lost_ack"; turnId: number };
+  | { status: "lost_ack"; turnId: number }
+  | { status: "progress_cleaned"; turnId: number };

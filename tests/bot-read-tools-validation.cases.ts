@@ -28,13 +28,6 @@ test("strict schemas reject malformed, coerced, and extra arguments as data", as
       { message_id: 1, before: -1, after: 31 },
       "before",
     ],
-    ["web_search", { query: "релиз", extra: 1 }, "extra"],
-    ["static_page_fetch", { url: "http://example.com" }, "url"],
-    ["static_page_fetch", { url: "https://example.com", max_chars: 499 }, "max_chars"],
-    ["static_page_fetch", { url: "https://example.com", extra: true }, "extra"],
-    ["research_lookup", { query: "", limit: 1 }, "query"],
-    ["research_lookup", { query: "рынок", limit: 6 }, "limit"],
-    ["research_lookup", { query: "рынок", unknown: true }, "unknown"],
   ];
 
   for (const [name, args, field] of cases) {
@@ -51,7 +44,7 @@ test("strict schemas reject malformed, coerced, and extra arguments as data", as
   assert.equal(unknown.error.code, "unknown_tool");
 });
 
-test("cache and provider exceptions are returned as typed error data", async () => {
+test("cache exceptions are returned as typed error data", async () => {
   const cacheTools = new BotReadTools({
     chatId: CHAT.chatId,
     cache: emptyCache({
@@ -67,28 +60,6 @@ test("cache and provider exceptions are returned as typed error data", async () 
   assert.equal(cacheFailure.error.retryable, false);
   assert.equal(cacheFailure.error.message, "Chat search failed.");
   assert.doesNotMatch(cacheFailure.error.message, /SQLITE_IOERR/);
-
-  const webTools = new BotReadTools({
-    chatId: CHAT.chatId,
-    cache: emptyCache(),
-    webSearch: {
-      async search() {
-        throw new Error("provider exploded");
-      },
-    },
-  });
-  const providerFailure = asFailure(
-    await webTools.callTool("web_search", { query: "x" }),
-  );
-  assert.equal(providerFailure.error.code, "provider_error");
-  assert.equal(providerFailure.error.retryable, true);
-  assert.equal(providerFailure.error.message, "Web search failed.");
-  assert.doesNotMatch(providerFailure.error.message, /provider exploded/);
-
-  const unavailable = asFailure(
-    await cacheTools.callTool("web_search", { query: "x" }),
-  );
-  assert.equal(unavailable.error.code, "provider_unavailable");
 });
 
 test("tool payloads are projected once and stay inside the hard character budget", async () => {

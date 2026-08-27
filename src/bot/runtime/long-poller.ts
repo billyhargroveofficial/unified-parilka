@@ -6,7 +6,7 @@ const OFFSET_CONFIRMATION_TIMEOUT_MS = 5_000;
 const ALLOWED_UPDATES = ["message", "edited_message"] as const;
 const HEARTBEAT_INTERVAL_MS = 5 * 60_000;
 
-export interface GrammyLongPollingApiPort {
+export interface TelegramLongPollingApiPort {
   getMe(signal: AbortSignal): Promise<unknown>;
   deleteWebhook(
     options: { drop_pending_updates: false },
@@ -24,7 +24,7 @@ export interface GrammyLongPollingApiPort {
 }
 
 export interface BotApiLongPollerOptions {
-  api: GrammyLongPollingApiPort;
+  api: TelegramLongPollingApiPort;
   processor: BotUpdateProcessor;
   expectedBotId: string;
   expectedBotUsername: string;
@@ -43,7 +43,7 @@ export interface BotApiLongPollerOptions {
  * by committed SQLite state can do that.
  */
 export class BotApiLongPoller {
-  readonly #api: GrammyLongPollingApiPort;
+  readonly #api: TelegramLongPollingApiPort;
   readonly #processor: BotUpdateProcessor;
   readonly #expectedBotId: string;
   readonly #expectedBotUsername: string;

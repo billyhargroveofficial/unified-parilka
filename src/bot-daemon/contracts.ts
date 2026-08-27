@@ -1,116 +1,75 @@
-import type { Api } from "grammy";
-import type { AppConfig } from "../config.js";
-import type {
-  AiSdkBotTurnAgent,
-  TurnModelRouter,
-} from "../bot/ai-agent.js";
-import type {
-  BotVectorSearchPort,
-  CanonicalBotReadCache,
-} from "../bot/read-cache.js";
-import type {
-  BotReadTools,
-  ResearchGatewayProvider,
-  WebSearchProvider,
-} from "../bot/read-tools.js";
-import type { BotMemoryTools } from "../bot/memory-tools.js";
-import type { BotMediaTools } from "../bot/media-tools.js";
-import type {
-  BotApiLongPoller,
-  BotApiRuntime,
-  BotUpdateProcessor,
-  BotWorkerDrainResult,
-  BotWorkerPump,
-} from "../bot/runtime.js";
-import type {
-  BotRuntimeConfig,
-  BotResearchGatewayRuntimeConfig,
-  BotWebSearchRuntimeConfig,
-} from "../bot/runtime-config.js";
+import type { BotReadTools } from "../bot/read-tools.js";
+import type { CanonicalBotReadCache, BotVectorSearchPort } from "../bot/read-cache.js";
+import type { CausalRagContextBuilder } from "../bot/causal-rag/index.js";
+import type { TelegramImageDownloadApi } from "../bot/media/index.js";
+import type { BotApiLongPoller, BotApiRuntime, BotUpdateProcessor, BotWorkerDrainResult, BotWorkerPump, TelegramBotApiPort } from "../bot/runtime.js";
 import type { TurnCoordinator } from "../bot/turn-coordinator.js";
-import type {
-  BotTurnWorker,
-  JsonEventLogger,
-} from "../bot/worker.js";
+import type { BotTurnWorker, JsonEventLogger } from "../bot/worker.js";
+import type { BotTurnAgent } from "../bot/agent-contract.js";
+import type { BotRuntimeConfig, BotRuntimeEnvironment } from "../bot/runtime-config.js";
 import type { MessageStore } from "../store.js";
 
-export type BotDaemonApi = Pick<
-  Api,
-  | "getMe"
-  | "deleteWebhook"
-  | "getUpdates"
-  | "getFile"
-  | "sendMessage"
-  | "sendRichMessage"
-  | "sendChatAction"
-  | "editMessageText"
-  | "deleteMessage"
->;
+export type BotDaemonApi = TelegramBotApiPort & {
+  /** Releases production HTTP pools after polling and workers have drained. */
+  close?(): Promise<void>;
+} & Partial<TelegramImageDownloadApi>;
+
+export type ClosableBotTurnAgent = BotTurnAgent & {
+  close(): Promise<void>;
+};
+
+export interface BotAgentCompositionContext {
+  readonly store: MessageStore;
+  readonly api: BotDaemonApi;
+  readonly cache: CanonicalBotReadCache;
+  readonly readTools: BotReadTools;
+  readonly causalRag: CausalRagContextBuilder;
+}
 
 export interface ComposeBotDaemonOptions {
-  config: Readonly<BotRuntimeConfig>;
-  store: MessageStore;
-  api: BotDaemonApi;
-  router: TurnModelRouter;
-  vector?: BotVectorSearchPort;
-  webSearch?: WebSearchProvider;
-  researchGateway?: ResearchGatewayProvider;
-  appConfig?: Readonly<AppConfig>;
-  logger?: JsonEventLogger;
-  workerIdPrefix?: string;
+  readonly config: BotRuntimeConfig;
+  readonly store: MessageStore;
+  readonly api: BotDaemonApi;
+  readonly createAgent: (context: BotAgentCompositionContext) => ClosableBotTurnAgent;
+  readonly vector?: BotVectorSearchPort;
+  readonly logger?: JsonEventLogger;
+  readonly workerIdPrefix?: string;
 }
 
 export interface BotDaemonComposition {
-  runtime: BotApiRuntime;
-  poller: BotApiLongPoller;
-  workerPump: BotWorkerPump;
-  workers: readonly BotTurnWorker[];
-  processor: BotUpdateProcessor;
-  coordinator: TurnCoordinator;
-  cache: CanonicalBotReadCache;
-  readTools: BotReadTools;
-  mediaTools: BotMediaTools;
-  memoryTools: BotMemoryTools;
-  agent: AiSdkBotTurnAgent;
+  readonly runtime: BotApiRuntime;
+  readonly poller: BotApiLongPoller;
+  readonly workerPump: BotWorkerPump;
+  readonly workers: readonly BotTurnWorker[];
+  readonly processor: BotUpdateProcessor;
+  readonly coordinator: TurnCoordinator;
+  readonly cache: CanonicalBotReadCache;
+  readonly readTools: BotReadTools;
+  readonly causalRag: CausalRagContextBuilder;
+  readonly agent: ClosableBotTurnAgent;
+  close(): Promise<void>;
 }
 
 export interface ProductionBotDaemonFactories {
-  createApi(token: string): BotDaemonApi;
-  createStore(path: string): MessageStore;
-  createRouter(
-    path: string,
-    env: Readonly<Record<string, string | undefined>>,
-  ): TurnModelRouter;
-  createVector(
-    config: AppConfig,
-    store: MessageStore,
-  ): BotVectorSearchPort & { readonly isConfigured: boolean };
-  createWebSearch(
-    config: Readonly<BotWebSearchRuntimeConfig>,
-  ): WebSearchProvider;
-  createResearchGateway(
-    config: Readonly<BotResearchGatewayRuntimeConfig>,
-  ): ResearchGatewayProvider;
+  readonly createApi: (token: string, store: MessageStore, config: BotRuntimeConfig) => BotDaemonApi;
+  readonly createStore: (path: string) => MessageStore;
+  readonly createAgent: (context: BotAgentCompositionContext, config: BotRuntimeConfig) => ClosableBotTurnAgent;
+  readonly createVector?: (store: MessageStore, config: BotRuntimeConfig) => BotVectorSearchPort | undefined;
+  readonly preflight?: (config: BotRuntimeConfig) => void;
 }
 
 export interface CreateProductionBotDaemonOptions {
-  env?: Readonly<Record<string, string | undefined>>;
-  appConfig?: AppConfig;
-  logger?: JsonEventLogger;
-  factories?: Partial<ProductionBotDaemonFactories>;
-  workerIdPrefix?: string;
+  readonly env?: BotRuntimeEnvironment;
+  readonly logger?: JsonEventLogger;
+  readonly factories?: Partial<ProductionBotDaemonFactories>;
+  readonly workerIdPrefix?: string;
 }
 
 export interface ProductionBotDaemon extends BotDaemonComposition {
-  config: BotRuntimeConfig;
-  appConfig: AppConfig;
-  store: MessageStore;
-  logger?: JsonEventLogger;
-  vectorEnabled: boolean;
-  webSearchEnabled: boolean;
-  researchGatewayEnabled: boolean;
+  readonly config: BotRuntimeConfig;
+  readonly store: MessageStore;
+  readonly logger?: JsonEventLogger;
   activeWorkerCount(): number;
-  close(): void;
 }
 
 export interface BotDaemonRuntimePort {
@@ -119,19 +78,13 @@ export interface BotDaemonRuntimePort {
 }
 
 export interface BotDaemonLifecycleTarget {
-  runtime: BotDaemonRuntimePort;
+  readonly runtime: BotDaemonRuntimePort;
   activeWorkerCount?(): number;
-  close(): void;
-  logger?: JsonEventLogger;
+  close(): void | Promise<void>;
+  readonly logger?: JsonEventLogger;
 }
 
 export interface BotDaemonSignalSource {
-  once(
-    event: "SIGINT" | "SIGTERM",
-    listener: (signal: NodeJS.Signals) => void,
-  ): unknown;
-  off(
-    event: "SIGINT" | "SIGTERM",
-    listener: (signal: NodeJS.Signals) => void,
-  ): unknown;
+  once(event: "SIGINT" | "SIGTERM", listener: (signal: NodeJS.Signals) => void): unknown;
+  off(event: "SIGINT" | "SIGTERM", listener: (signal: NodeJS.Signals) => void): unknown;
 }

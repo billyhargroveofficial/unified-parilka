@@ -22,20 +22,19 @@ Telegram. The optional `PARILKA_BOT_ID` env var (exposed as
 `authorRole=assistant` / `isOwnTurn=true`.
 
 Trust boundary: the raw MCP `source_message_id` is a service field meant
-only for a trusted bridge, never for the model. The future Hermes
-model-facing plugin hides the argument and substitutes its own
-`HERMES_SESSION_MESSAGE_ID`. Do not derive the bound by clamping to
+only for the trusted Codex host bridge, never for the model. The dynamic-tool
+dispatcher injects it from the durable Bot API turn and does not expose it in
+the model schema. Do not derive the bound by clamping to
 `MAX(message_id)` in a lively chat — the newest row may be newer than the
 trigger, which would leak the trigger and later messages.
 
 Error envelope exception: boundary failures (missing/invalid
 `source_message_id`, invalid tool arguments) keep MCP `isError` like every
-other tool. Typed operational BotRead failures (`cache_error`,
-`provider_unavailable`, `provider_error`, `timeout`, `aborted`, `unsafe_url`)
-deliberately stay a normal MCP response carrying the `{ok:false, tool,
-error:{code…}, evidence:[]}` envelope (see `jsonCacheReadResult` in
-`response.ts`), so Hermes can act on the structured code instead of an opaque
-protocol error.
+other tool. Typed operational BotRead failures (`cache_error`, `timeout`,
+`aborted`) deliberately stay a normal MCP response carrying the `{ok:false,
+tool, error:{code…}, evidence:[]}` envelope (see `jsonCacheReadResult` in
+`response.ts`), so the host can return a structured model-tool result instead
+of an opaque protocol error.
 
 Every handler receives the MCP request `AbortSignal`. Network-backed chat
 resolution, reply preflight, and send admission check it before and after

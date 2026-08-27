@@ -1,5 +1,7 @@
-import type { AppConfig } from "../config.js";
-import { blobToVector, cosineSimilarity } from "../embeddings.js";
+import {
+  createBlobCosineScorer,
+  type EmbeddingRuntimeConfig,
+} from "../embeddings.js";
 import { ToolError } from "../errors.js";
 import {
   MessageStore,
@@ -16,7 +18,7 @@ import type {
 
 export class VectorSearcher {
   constructor(
-    private readonly config: AppConfig,
+    private readonly config: EmbeddingRuntimeConfig,
     private readonly store: MessageStore,
     private readonly backend: VectorBackend,
     private readonly namespace: string,
@@ -25,7 +27,10 @@ export class VectorSearcher {
   async search(
     params: VectorSearchParams,
   ): Promise<VectorSearchResult> {
-    const stats = this.store.getEmbeddingStats(params.chatId, {
+    // Per-turn availability needs only the exact index metadata. Coverage is
+    // retained for diagnostics/indexing through getEmbeddingStats, because a
+    // full corpus coverage scan here would dominate every interactive search.
+    const stats = this.store.getEmbeddingSearchStats(params.chatId, {
       namespace: this.namespace,
     });
     if (
@@ -169,6 +174,9 @@ export class VectorSearcher {
         dimensions: params.searchDimensions,
         beforeId: params.window.beforeId,
         afterId: params.window.afterId,
+        // Membership rows are not needed to score vectors.  Deferring them
+        // avoids a query per corpus chunk on ordinary bot turns.
+        hydrateMessageIds: false,
         limit: candidateLimit + 1,
       });
       if (chunks.length > candidateLimit) {
@@ -191,29 +199,45 @@ export class VectorSearcher {
           candidateCount: chunks.length,
         };
       }
-      const hits = chunks
+      // Validate the query once and score each stored BLOB in a single pass.
+      // Do not materialize or cache candidate vectors: a call observes the
+      // exact database BLOB it was handed, including corruption.
+      const scoreBlob = createBlobCosineScorer(params.queryVector);
+      const ranked = chunks
         .map((chunk) => ({
           chunk,
-          score: cosineSimilarity(
-            params.queryVector,
-            blobToVector(chunk.embedding, chunk.dimensions),
-          ),
+          score: scoreBlob(chunk.embedding, chunk.dimensions),
         }))
-        .sort((left, right) => right.score - left.score)
-        .map((hit) =>
-          this.toVectorHit(
-            hit.chunk,
-            hit.score,
+        .sort((left, right) => right.score - left.score);
+      const hits: VectorSearchHit[] = [];
+
+      // The coarse SQL range predicates guarantee a member can exist in the
+      // requested causal window for each well-formed chunk.  Hydrate ranked
+      // candidates in small batches nevertheless: it preserves that window
+      // when legacy/corrupt membership rows are absent, without returning to
+      // N+1 queries or loading the whole corpus' memberships.
+      for (let offset = 0; offset < ranked.length && hits.length < params.limit; offset += params.limit) {
+        const batch = ranked.slice(offset, offset + params.limit);
+        const messageIdsByChunkId = this.store.getEmbeddingChunkMessageIds({
+          chunkIds: batch.map(({ chunk }) => chunk.id),
+        });
+        for (const candidate of batch) {
+          const hit = this.toVectorHit(
+            {
+              ...candidate.chunk,
+              messageIds: messageIdsByChunkId.get(candidate.chunk.id) ?? [],
+            },
+            candidate.score,
             params.includeMessages,
             params.window,
-          ),
-        )
-        .filter((hit): hit is VectorSearchHit => hit != null)
-        .slice(0, params.limit)
-        .map((hit, index) => ({ ...hit, rank: index + 1 }));
+          );
+          if (hit !== undefined) hits.push(hit);
+          if (hits.length === params.limit) break;
+        }
+      }
       return {
         available: true,
-        hits,
+        hits: hits.map((hit, index) => ({ ...hit, rank: index + 1 })),
         candidateCount: chunks.length,
       };
     } catch (error) {

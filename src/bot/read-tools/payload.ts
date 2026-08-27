@@ -153,11 +153,7 @@ export function deduplicateEvidence(
     const key =
       item.source === "chat_message"
         ? `chat:${item.chat?.id}:${item.message?.id}`
-        : item.source === "web" || item.source === "paper"
-          ? `${item.source}:${item.url}:${item.text}`
-          : item.source === "research"
-            ? `research:${item.date}:${item.text}`
-            : `digest:${item.chat?.id}:${item.range?.dayFrom}:${item.range?.dayTo}:${item.text}`;
+        : `digest:${item.chat?.id}:${item.range?.dayFrom}:${item.range?.dayTo}:${item.text}`;
     if (seen.has(key)) {
       return false;
     }

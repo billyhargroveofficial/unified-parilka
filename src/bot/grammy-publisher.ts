@@ -1,5 +1,3 @@
-import type { Api } from "grammy";
-import { GrammyError, HttpError } from "grammy";
 import {
   splitTelegramText,
   TELEGRAM_TEXT_LIMIT_UTF16,
@@ -44,15 +42,15 @@ export interface GrammyRichMessageSendInput {
 }
 
 /**
- * The publisher only needs two Bot API operations. Keeping this port narrower
- * than grammY's Api makes delivery behavior straightforward to test.
+ * The publisher only needs two Bot API operations. This is deliberately a
+ * native transport port: no Bot API framework leaks into durable delivery.
  */
 export interface GrammyBotApiPort {
   sendRichMessage(input: GrammyRichMessageSendInput): Promise<unknown>;
   sendMessage(
     chatId: string,
     text: string,
-    options: GrammySendMessageOptions,
+    options: GrammySendMessageOptions | undefined,
     signal: AbortSignal,
   ): Promise<unknown>;
 }
@@ -253,30 +251,12 @@ export class GrammyBotTurnPublisher implements BotTurnPublisher {
 }
 
 /**
- * Adapts a real grammY Api without exposing the rest of it to the publisher.
+ * Creates the publisher from any native Bot API port.
  */
-export function createGrammyBotTurnPublisher(
-  api: Pick<Api, "sendRichMessage" | "sendMessage">,
+export function createBotApiTurnPublisher(
+  api: GrammyBotApiPort,
 ): GrammyBotTurnPublisher {
-  return new GrammyBotTurnPublisher({
-    sendRichMessage: (input) =>
-      api.sendRichMessage(
-        input.chatId,
-        input.richMessage as unknown as Parameters<Api["sendRichMessage"]>[1],
-        input.options as unknown as Parameters<Api["sendRichMessage"]>[2],
-        // grammY 1.45 declares the fourth argument with abort-controller's
-        // structural shim, while Node exposes the native, runtime-compatible
-        // signal used by the worker.
-        input.signal as unknown as Parameters<Api["sendRichMessage"]>[3],
-      ),
-    sendMessage: (chatId, text, options, signal) =>
-      api.sendMessage(
-        chatId,
-        text,
-        options as unknown as Parameters<Api["sendMessage"]>[2],
-        signal as unknown as Parameters<Api["sendMessage"]>[3],
-      ),
-  });
+  return new GrammyBotTurnPublisher(api);
 }
 
 function richOptions(replyToMessageId: number): GrammyRichMessageOptions {
@@ -293,27 +273,14 @@ function classifyThrownFailure(
   signal: AbortSignal,
   chunksSent: number,
 ): TelegramPublisherResult {
-  if (error instanceof HttpError) {
-    return ambiguousOrPartialFailure(
-      chunksSent,
-      classifyTransportFailure(error.error, signal, true),
-    );
-  }
-
-  const rejection =
-    error instanceof GrammyError
-      ? {
-          errorCode: error.error_code,
-          ...retryAfterFromParameters(error.parameters),
-        }
-      : readTelegramRejection(error);
+  const rejection = readTelegramRejection(error);
   if (rejection) {
     return classifyTelegramRejection(rejection, chunksSent);
   }
 
   return ambiguousOrPartialFailure(
     chunksSent,
-    classifyTransportFailure(error, signal, false),
+    classifyTransportFailure(error, signal),
   );
 }
 
@@ -348,7 +315,6 @@ function classifyTelegramRejection(
 function classifyTransportFailure(
   error: unknown,
   signal: AbortSignal,
-  fromHttpError: boolean,
 ): PublisherFailure {
   if (signal.aborted) {
     return { kind: "timeout", code: "ABORTED" };
@@ -372,10 +338,6 @@ function classifyTransportFailure(
 
   if (marker.code !== undefined && NETWORK_CODES.has(marker.code)) {
     return { kind: "network", code: marker.code };
-  }
-
-  if (fromHttpError) {
-    return { kind: "network", code: "HTTP_ERROR" };
   }
 
   return { kind: "unknown", code: "UNKNOWN_ERROR" };
@@ -424,13 +386,9 @@ function readTelegramRejection(value: unknown): TelegramRejection | undefined {
 }
 
 function isRichParseRejection(error: unknown): boolean {
-  if (!(error instanceof GrammyError)) {
-    return false;
-  }
-  return isRichParseRejectionCode(
-    error.error_code,
-    error.description,
-  );
+  const rejection = readTelegramRejection(error);
+  return rejection !== undefined &&
+    isRichParseRejectionCode(rejection.errorCode, rejection.description);
 }
 
 function isRichParseRejectionCode(

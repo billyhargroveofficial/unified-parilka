@@ -32,6 +32,7 @@ export abstract class SchemaLifecycleMethods extends StoreCore {
   declare protected applyBackfillExhaustedMigration: () => void;
   declare protected applyBaseSchema: () => void;
   declare protected applyBotChatDreamDaysMigration: () => void;
+  declare protected applyBotCodexSessionsMigration: () => void;
   declare protected applyBotChatMemoryMigration: () => void;
   declare protected applyBotChatKnowledgeMigration: () => void;
   declare protected applyRetireBotCallbackIntentsMigration: () => void;
@@ -144,6 +145,10 @@ export abstract class SchemaLifecycleMethods extends StoreCore {
         this.applyDreamAuditMigration();
         this.db.exec("PRAGMA user_version = 22");
       }
+      if (currentVersion < 23) {
+        this.applyBotCodexSessionsMigration();
+        this.db.exec("PRAGMA user_version = 23");
+      }
       // This is a backwards-compatible performance index, not a data-model
       // change. Reconcile it for every writable compatible open so databases
       // created by an earlier build do not make one full corpus scan per day.
@@ -164,6 +169,7 @@ export abstract class SchemaLifecycleMethods extends StoreCore {
       "send_throttle_state",
       "bot_updates",
       "bot_turns",
+      "bot_codex_sessions",
       "bot_chat_memory",
       "bot_chat_fast_memory",
       "bot_chat_lessons",
@@ -266,6 +272,13 @@ export abstract class SchemaLifecycleMethods extends StoreCore {
       "updated_at_ms",
       "started_at_ms",
       "completed_at_ms",
+    ]);
+    this.assertColumns("bot_codex_sessions", [
+      "chat_id",
+      "thread_id",
+      "revision",
+      "created_at_ms",
+      "updated_at_ms",
     ]);
     this.assertColumns("bot_chat_memory", [
       "chat_id",

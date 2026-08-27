@@ -20,7 +20,9 @@ import type {
  * walk the frozen keyset through nextCursor. The model-facing count budget
  * stays 1_000 while a single call carries at most one page.
  */
-export const MAX_TRANSCRIPT_PAGE_ROWS = 300;
+// A 200-row page keeps the model-facing projected transcript below the
+// 64k function-output cap even after per-message attribution metadata.
+export const MAX_TRANSCRIPT_PAGE_ROWS = 200;
 export const MAX_TRANSCRIPT_RECENT_COUNT = 1_000;
 const MAX_TRANSCRIPT_CURSOR_CHARS = 512;
 const TRANSCRIPT_CURSOR_VERSION = 1;

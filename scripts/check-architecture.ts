@@ -15,17 +15,11 @@ const TEST_LINE_CEILING = 500;
 const BARREL_LINE_CEILING = 150;
 
 const thinBarrels = [
-  "src/bot-daemon.ts",
   "src/index.ts",
   "src/sync-daemon.ts",
   "src/bot/read-tools.ts",
-  "src/bot/runtime.ts",
-  "src/bot/runtime-config.ts",
-  "src/bot/turn-coordinator.ts",
-  "src/bot/worker.ts",
   "src/config.ts",
   "src/digests.ts",
-  "src/providers/model-router.ts",
   "src/store.ts",
   "src/sync-engine.ts",
   "src/telegram/mtcute-client.ts",
@@ -64,7 +58,6 @@ const documentationRoots = [
 
 const processShellEntrypoints = new Set([
   "src/index.ts",
-  "src/bot-daemon.ts",
   "src/sync-daemon.ts",
 ]);
 
@@ -89,6 +82,8 @@ export type ArchitectureFinding = {
     | "invalid-claude-alias"
     | "missing-required-path"
     | "missing-thin-barrel"
+    | "retired-bot-runtime"
+    | "unsafe-bot-entrypoint"
     | "production-file-too-large"
     | "test-file-too-large";
   file: string;
@@ -192,6 +187,8 @@ export function checkArchitecture(repositoryRoot = process.cwd()): ArchitectureC
 
   checkRootDocLinks(repositoryRoot, findings);
   checkStorageDependencyDirection(repositoryRoot, findings);
+  checkBotApiEntrypoints(repositoryRoot, findings);
+  checkRetiredBotRuntime(repositoryRoot, productionFiles, findings);
 
   for (const relative of forbiddenRootTodos) {
     if (existsSync(path.join(repositoryRoot, relative))) {
@@ -265,6 +262,62 @@ export function checkArchitecture(repositoryRoot = process.cwd()): ArchitectureC
   };
 }
 
+/**
+ * Git is the rollback mechanism for the retired harnesses. Keeping their
+ * executable trees or launch vocabulary in current TypeScript makes an
+ * accidental app-server/Hermes resurrection too easy, while the legacy
+ * `bot_codex_sessions` SQLite table may remain as inert schema compatibility.
+ */
+function checkRetiredBotRuntime(
+  repositoryRoot: string,
+  productionFiles: readonly string[],
+  findings: ArchitectureFinding[],
+): void {
+  const retiredPaths = [
+    "src/bot/codex",
+    "src/bot-daemon/codex-agent.ts",
+    "src/codex/digest-runner.ts",
+    "src/openai-responses/sdk-transport.ts",
+    "src/hermes-projection",
+    "src/hermes-projection-cli.ts",
+    "integrations/hermes",
+  ] as const;
+  for (const relative of retiredPaths) {
+    const target = path.join(repositoryRoot, relative);
+    if (!isRegularFile(target) && listFiles(target).length === 0) continue;
+    findings.push({
+      code: "retired-bot-runtime",
+      file: relative,
+      message: `${relative} is a retired executable bot runtime; restore it only through a new reviewed migration`,
+    });
+  }
+
+  const retiredSourceMarkers = [
+    "PARILKA_BOT_CODEX_HOME",
+    "PARILKA_BOT_CODEX_PATH",
+    "PARILKA_BOT_CODEX_CWD",
+    "PARILKA_BOT_CODEX_AUTH_SOURCE",
+    "spawnCodexAppServer",
+    "runBotCodexPreflight",
+    "OpenAiSdkResponsesTransport",
+  ] as const;
+  for (const file of productionFiles) {
+    if (path.relative(repositoryRoot, file) === "scripts/check-architecture.ts") {
+      continue;
+    }
+    const source = readFileSync(file, "utf8");
+    for (const marker of retiredSourceMarkers) {
+      if (!source.includes(marker)) continue;
+      const relative = path.relative(repositoryRoot, file);
+      findings.push({
+        code: "retired-bot-runtime",
+        file: relative,
+        message: `${relative} contains retired bot runtime marker ${marker}`,
+      });
+    }
+  }
+}
+
 function isRegularFile(file: string): boolean {
   try {
     return statSync(file).isFile();
@@ -333,6 +386,63 @@ function checkStorageDependencyDirection(
   }
 }
 
+function checkBotApiEntrypoints(
+  repositoryRoot: string,
+  findings: ArchitectureFinding[],
+): void {
+  const relative = "package.json";
+  const file = path.join(repositoryRoot, relative);
+  if (!existsSync(file)) {
+    return;
+  }
+
+  let scripts: Record<string, unknown> | undefined;
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(file, "utf8"));
+    if (typeof parsed === "object" && parsed !== null) {
+      const candidate = (parsed as { scripts?: unknown }).scripts;
+      if (typeof candidate === "object" && candidate !== null) {
+        scripts = candidate as Record<string, unknown>;
+      }
+    }
+  } catch {
+    findings.push({
+      code: "unsafe-bot-entrypoint",
+      file: relative,
+      message: "package.json must declare Bot API scripts through ./bin/parilka-bot",
+    });
+    return;
+  }
+
+  for (const name of ["bot", "bot:start"]) {
+    if (scripts?.[name] !== "./bin/parilka-bot") {
+      findings.push({
+        code: "unsafe-bot-entrypoint",
+        file: relative,
+        message: `package.json script ${name} must use ./bin/parilka-bot so the lifetime flock is held`,
+      });
+    }
+  }
+
+  const runtimeConfigRelative = path.join("src", "bot", "runtime-config.ts");
+  const runtimeConfigFile = path.join(repositoryRoot, runtimeConfigRelative);
+  if (existsSync(runtimeConfigFile)) {
+    const source = readFileSync(runtimeConfigFile, "utf8");
+    const sharedBootstrap = staticModuleSpecifiers(runtimeConfigFile, source)
+      .some((specifier) =>
+        specifier === "../config.js" || specifier.includes("config/env-files"),
+      );
+    if (sharedBootstrap) {
+      findings.push({
+        code: "unsafe-bot-entrypoint",
+        file: runtimeConfigRelative,
+        message:
+          "Bot API runtime must use its explicit process environment and must not load the shared MTProto dotenv layer",
+      });
+    }
+  }
+}
+
 function staticModuleSpecifiers(file: string, source: string): string[] {
   const parsed = ts.createSourceFile(
     file,
@@ -378,11 +488,9 @@ function forbiddenStorageBoundary(
   targetRelative: string,
 ): string | undefined {
   if (
-    isPathWithin(targetRelative, path.join("src", "bot")) ||
-    targetRelative === path.join("src", "bot-daemon.ts") ||
-    isPathWithin(targetRelative, path.join("src", "bot-daemon"))
+    isPathWithin(targetRelative, path.join("src", "bot"))
   ) {
-    return "bot or bot-daemon";
+    return "bot";
   }
   if (
     isPathWithin(targetRelative, path.join("src", "mcp-tools")) ||

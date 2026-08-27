@@ -25,7 +25,11 @@
   DI-container, event bus, Redis/queue/vector service или новый runtime без
   доказанной failure mode.
 - Два long-lived процесса остаются явными: `parilka-sync` владеет одной
-  MTProto session и loopback MCP, `parilka-bot` владеет одним Bot API poller.
+  MTProto session и loopback MCP, `parilka-bot` владеет Bot API polling,
+  durable turn/outbox lifecycle и replies. Bot runtime вызывает OpenAI
+  Responses API напрямую из чистого TypeScript loop с code-owned
+  `gpt-5.6-luna`, `service_tier=fast` и hosted tools; Codex app-server,
+  Hermes и отдельный model gateway в production-граф не входят.
   Они разделяют один versioned SQLite, но не общий процесс.
 - Storage domains используют один `DatabaseSync` и общий transaction kernel.
   Нельзя открывать соединение на repository, вкладывать транзакции или
@@ -52,6 +56,13 @@ build, tests, secret scan, native-storage/MCP smokes и dependency audit):
 ```bash
 npm run verify
 ```
+
+Пока предыдущий production owner исполняет rollback-артефакт из `dist/`,
+используйте `npm run verify:responses`: этот равноценный migration-gate не
+перезаписывает `dist/`, исключает заведомо stale wrapper-smoke и только после
+остальных зелёных проверок атомарно активирует immutable Responses release.
+Обычный `npm run verify` требует отдельного maintenance window, где замена
+общего `dist/` явно запланирована.
 
 Изменение MCP transport/registry дополнительно проходит offline smoke:
 

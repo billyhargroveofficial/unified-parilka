@@ -32,7 +32,7 @@ function fixtureStore(t: TestContext, total = 1_500): MessageStore {
   return store;
 }
 
-test("recent slice paginates newest-first in 300-row pages without gaps", (t) => {
+test("recent slice paginates newest-first in 200-row pages without gaps", (t) => {
   const store = fixtureStore(t);
   store.markMessagesDeleted(CHAT.chatId, [1_450]);
 
@@ -43,17 +43,17 @@ test("recent slice paginates newest-first in 300-row pages without gaps", (t) =>
   });
 
   assert.equal(result.form, "recent");
-  // The newest 300 of the window: ids 1200..1500 minus the deleted id 1450.
-  assert.equal(result.messages.length, 300);
-  assert.equal(result.coverage.returnedCount, 300);
-  assert.equal(result.coverage.coveredCount, 300);
+  // The newest 200 of the window: ids 1300..1500 minus the deleted id 1450.
+  assert.equal(result.messages.length, 200);
+  assert.equal(result.coverage.returnedCount, 200);
+  assert.equal(result.coverage.coveredCount, 200);
   assert.equal(result.coverage.totalAvailable, 1_499);
   assert.equal(result.coverage.upperMessageId, 1_500);
   assert.equal(result.coverage.truncated, true);
   assert.equal(result.coverage.hasMore, true);
   assert.notEqual(result.coverage.nextCursor, undefined);
   assert.equal(result.coverage.omittedCount, 699);
-  assert.equal(result.coverage.firstMessageId, 1_200);
+  assert.equal(result.coverage.firstMessageId, 1_300);
   assert.equal(result.coverage.lastMessageId, 1_500);
   assert.ok(
     result.messages.every(
@@ -91,15 +91,15 @@ test("recent slice paginates newest-first in 300-row pages without gaps", (t) =>
   assert.equal(emptyTextCount, 62);
 });
 
-test("recent 800 aggregates without duplicates through 300/300/200 pages", (t) => {
+test("recent 800 aggregates without duplicates through four 200-row pages", (t) => {
   const store = fixtureStore(t, 800);
   const first = store.getLiveTranscript({
     chatId: CHAT.chatId,
     form: "recent",
     count: 800,
   });
-  assert.equal(first.messages.length, 300);
-  assert.equal(first.coverage.firstMessageId, 501);
+  assert.equal(first.messages.length, 200);
+  assert.equal(first.coverage.firstMessageId, 601);
   assert.equal(first.coverage.lastMessageId, 800);
   assert.equal(first.coverage.hasMore, true);
 
@@ -108,9 +108,9 @@ test("recent 800 aggregates without duplicates through 300/300/200 pages", (t) =
     form: "recent",
     cursor: first.coverage.nextCursor ?? "",
   });
-  assert.equal(second.messages.length, 300);
-  assert.equal(second.coverage.firstMessageId, 201);
-  assert.equal(second.coverage.lastMessageId, 500);
+  assert.equal(second.messages.length, 200);
+  assert.equal(second.coverage.firstMessageId, 401);
+  assert.equal(second.coverage.lastMessageId, 600);
   assert.equal(second.coverage.hasMore, true);
 
   const third = store.getLiveTranscript({
@@ -119,17 +119,28 @@ test("recent 800 aggregates without duplicates through 300/300/200 pages", (t) =
     cursor: second.coverage.nextCursor ?? "",
   });
   assert.equal(third.messages.length, 200);
-  assert.equal(third.coverage.firstMessageId, 1);
-  assert.equal(third.coverage.lastMessageId, 200);
-  assert.equal(third.coverage.hasMore, false);
-  assert.equal(third.coverage.nextCursor, undefined);
-  assert.equal(third.coverage.coveredCount, 800);
-  assert.equal(third.coverage.truncated, false);
+  assert.equal(third.coverage.firstMessageId, 201);
+  assert.equal(third.coverage.lastMessageId, 400);
+  assert.equal(third.coverage.hasMore, true);
+
+  const fourth = store.getLiveTranscript({
+    chatId: CHAT.chatId,
+    form: "recent",
+    cursor: third.coverage.nextCursor ?? "",
+  });
+  assert.equal(fourth.messages.length, 200);
+  assert.equal(fourth.coverage.firstMessageId, 1);
+  assert.equal(fourth.coverage.lastMessageId, 200);
+  assert.equal(fourth.coverage.hasMore, false);
+  assert.equal(fourth.coverage.nextCursor, undefined);
+  assert.equal(fourth.coverage.coveredCount, 800);
+  assert.equal(fourth.coverage.truncated, false);
 
   const aggregated = [
     ...first.messages.map((row) => row.messageId),
     ...second.messages.map((row) => row.messageId),
     ...third.messages.map((row) => row.messageId),
+    ...fourth.messages.map((row) => row.messageId),
   ];
   assert.equal(aggregated.length, 800);
   assert.equal(new Set(aggregated).size, 800);
@@ -161,8 +172,8 @@ test("period slice paginates by keyset and freezes its upper bound", (t) => {
     startInclusive: "2026-07-10T00:00:00.000Z",
     endExclusive: "2026-07-20T00:00:00.000Z",
   });
-  assert.equal(first.coverage.returnedCount, 300);
-  assert.equal(first.coverage.coveredCount, 300);
+  assert.equal(first.coverage.returnedCount, 200);
+  assert.equal(first.coverage.coveredCount, 200);
   assert.equal(first.coverage.truncated, true);
   assert.equal(first.coverage.hasMore, true);
   assert.notEqual(first.coverage.nextCursor, undefined);

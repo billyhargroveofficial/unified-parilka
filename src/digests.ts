@@ -11,9 +11,12 @@ export {
   type DigestProcessLockOptions,
 } from "./digest/process-lock.js";
 export {
-  AiSdkSummaryPort,
-  type AiSdkSummaryPortOptions,
-} from "./digest/summary-port.js";
+  SummaryTextPort,
+  type SummaryTextPortOptions,
+  type SummaryTextRunRequest,
+  type SummaryTextRunResult,
+  type SummaryTextRunner,
+} from "./digest/summary-text-port.js";
 export {
   DAY_DIGEST_PROMPT_VERSION,
   DEFAULT_MAX_DAY_GENERATIONS_PER_RUN,
@@ -28,7 +31,6 @@ export {
   type DigestGenerationOptions,
   type DigestGenerationReport,
   type DigestItemStatus,
-  type DigestModelRouter,
   type DigestPhaseReport,
   type DigestReportItem,
   type DigestStore,

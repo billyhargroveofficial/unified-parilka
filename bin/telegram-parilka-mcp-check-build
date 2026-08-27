@@ -10,6 +10,22 @@ if [[ ! -f "$entrypoint" ]]; then
   exit 78
 fi
 
+responses_current="$project_dir/.deploy/responses-current"
+if [[ -L "$responses_current" ]]; then
+  responses_release="$(realpath -e -- "$responses_current" 2>/dev/null || true)"
+  resolved_entrypoint="$(realpath -e -- "$entrypoint" 2>/dev/null || true)"
+  if [[ -n "$responses_release" && "$resolved_entrypoint" == "$responses_release/"* ]]; then
+    if ! "${TELEGRAM_NODE:-node}" "$project_dir/scripts/responses-release-provenance.mjs" \
+      --release "$responses_release"
+    then
+      printf 'telegram-parilka-mcp: active Responses release provenance is stale or unsafe\n' >&2
+      printf 'Run: cd %q && npm run build:responses-release\n' "$project_dir" >&2
+      exit 78
+    fi
+    exit 0
+  fi
+fi
+
 stale_source="$(
   find "$project_dir/src" -type f -name '*.ts' \
     -newer "$entrypoint" -print -quit

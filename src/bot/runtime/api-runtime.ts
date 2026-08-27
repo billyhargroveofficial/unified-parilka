@@ -1,11 +1,14 @@
 import type { JsonEventLogger } from "../worker.js";
 import type { BotApiLongPoller } from "./long-poller.js";
 import type { BotWorkerDrainResult, BotWorkerPump } from "./worker-pump.js";
+import type { TypingLeaseManager } from "../typing.js";
 import { boundedInteger, compact } from "./helpers.js";
 
 export interface BotApiRuntimeOptions {
   poller: BotApiLongPoller;
   workers: BotWorkerPump;
+  /** Stops queue-held chat-action timers after active workers drain. */
+  typingLeases?: Pick<TypingLeaseManager, "stopAll">;
   shutdownTimeoutMs?: number;
   logger?: JsonEventLogger;
 }
@@ -13,12 +16,14 @@ export interface BotApiRuntimeOptions {
 export class BotApiRuntime {
   readonly #poller: BotApiLongPoller;
   readonly #workers: BotWorkerPump;
+  readonly #typingLeases: Pick<TypingLeaseManager, "stopAll"> | undefined;
   readonly #shutdownTimeoutMs: number;
   readonly #logger: JsonEventLogger | undefined;
 
   constructor(options: BotApiRuntimeOptions) {
     this.#poller = options.poller;
     this.#workers = options.workers;
+    this.#typingLeases = options.typingLeases;
     this.#shutdownTimeoutMs = boundedInteger(
       options.shutdownTimeoutMs ?? 180_000,
       1_000,
@@ -40,7 +45,12 @@ export class BotApiRuntime {
     // Queued turns are already durable. Graceful shutdown stops admission and
     // waits only for in-flight workers; it does not begin fresh model calls
     // while systemd is counting down the termination deadline.
-    const drained = await this.#workers.stop(this.#shutdownTimeoutMs);
+    let drained: BotWorkerDrainResult;
+    try {
+      drained = await this.#workers.stop(this.#shutdownTimeoutMs);
+    } finally {
+      this.#typingLeases?.stopAll();
+    }
     this.#log(
       drained.drained ? "info" : "error",
       drained.drained ? "bot.runtime.stopped" : "bot.runtime.drain_timeout",

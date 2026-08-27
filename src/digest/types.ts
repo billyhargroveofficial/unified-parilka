@@ -1,9 +1,4 @@
 import type {
-  ModelExecutionResult,
-  ModelRole,
-  ResolvedModelCandidate,
-} from "../providers/model-router.js";
-import type {
   DigestMessageDateBounds,
   StoredDayDigest,
   StoredDigestRollup,
@@ -45,16 +40,6 @@ export interface DigestSummaryResult {
 
 export interface DigestSummaryPort {
   summarize(request: DigestSummaryRequest): Promise<DigestSummaryResult>;
-}
-
-export interface DigestModelRouter {
-  executeWithFallback<T>(
-    role: ModelRole,
-    attempt: (
-      candidate: ResolvedModelCandidate,
-      attemptNumber: number,
-    ) => Promise<T>,
-  ): Promise<ModelExecutionResult<T>>;
 }
 
 export interface DigestStore {

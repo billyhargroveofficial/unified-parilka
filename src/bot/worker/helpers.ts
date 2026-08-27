@@ -35,6 +35,7 @@ export function isAgentFinal(value: unknown): value is BotAgentFinalResult {
   if (
     typeof telemetry.finalModelId !== "string" ||
     typeof telemetry.finalProviderId !== "string" ||
+    !isOptionalEffectiveServiceTier(telemetry.serviceTier) ||
     !isOptionalString(telemetry.reasoningMode) ||
     !Array.isArray(telemetry.steps) ||
     !isOptionalNonNegativeInteger(telemetry.totalInputTokens) ||
@@ -70,6 +71,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isOptionalString(value: unknown): value is string | undefined {
   return value === undefined || typeof value === "string";
+}
+
+function isOptionalEffectiveServiceTier(value: unknown): value is "fast" | "priority" | undefined {
+  return value === undefined || value === "fast" || value === "priority";
 }
 
 function isOptionalNonNegativeInteger(

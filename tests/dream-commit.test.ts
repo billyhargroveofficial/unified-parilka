@@ -3,7 +3,7 @@ import { test } from "node:test";
 import {
   DREAM_CHAT_ID,
   DREAM_YESTERDAY,
-  dreamFakeRouter,
+  dreamFakeTextRunner,
   dreamFixtureStore,
   makeDreamConsolidator,
   seedDreamInteraction,
@@ -197,7 +197,7 @@ test("dream commitDreamDay failure marks day failed and does not leak stage", as
     }) as typeof store.commitDreamDay;
 
     const result = await makeDreamConsolidator(
-      dreamFakeRouter({ text: "", toolCalls: 0, finishReason: "stop" }),
+      dreamFakeTextRunner({ text: "", toolCalls: 0, finishReason: "stop" }),
       {
         runReview: async (options) => {
           writeDreamKnowledge(options.store, 2);

@@ -1,214 +1,149 @@
-import type {
-  BotRuntimeConfig,
-  BotRuntimeEnvironment,
-} from "./contracts.js";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, statSync } from "node:fs";
+import { isAbsolute, resolve } from "node:path";
+import type { BotRuntimeConfig, BotRuntimeEnvironment, SafeBotRuntimeConfig } from "./contracts.js";
 import {
-  absolutePath,
-  boundedPlain,
-  enumValue,
-  existingAbsoluteFile,
-  integer,
-  normalizeBotUsername,
-  requiredPlain,
-  requiredSecret,
-  sameConfiguredFile,
-  telegramId,
-  telegramIdList,
-} from "./env-rules.js";
-import { optionalResearchGatewayConfig } from "./research-gateway.js";
-import { audioTranscribeConfig } from "./audio-transcribe.js";
-import { requireLoopbackHttpOrigin } from "../web-tools/url-validation.js";
-import {
-  assertBotTokenShape,
-  assertExclusivePoller,
-  validateBotRuntimeRelationships,
-} from "./validation.js";
-import { optionalWebSearchConfig } from "./web-search.js";
+  parseBotResponsesRuntimeConfig,
+  safeBotResponsesRuntimeConfig,
+} from "../responses/runtime-config.js";
+import { parseBotRagRuntimeConfig } from "../responses/rag-runtime-config.js";
 
-const DEFAULT_SHARED_DB_PATH =
-  "~/.telegram-parilka-mcp/messages.sqlite";
-
-/**
- * Parses only the bot runtime environment. Secret values never appear in
- * validation messages and getUpdates ownership is explicit even in shadow.
- */
-export function parseBotRuntimeConfig(
-  env: BotRuntimeEnvironment = process.env,
-): BotRuntimeConfig {
-  const token = requiredSecret(env, "PARILKA_BOT_TOKEN");
-  assertBotTokenShape(token);
-  assertExclusivePoller(env);
-
-  const allowedChatId = telegramId(
-    requiredPlain(env, "PARILKA_BOT_CHAT_ID"),
-    "PARILKA_BOT_CHAT_ID",
-    "negative",
-  );
-  const botId = telegramId(
-    requiredPlain(env, "PARILKA_BOT_ID"),
-    "PARILKA_BOT_ID",
-    "positive",
-  );
-  const botUsername = normalizeBotUsername(
-    requiredPlain(env, "PARILKA_BOT_USERNAME"),
-  );
-  const sharedDbPath = absolutePath(
-    env.TELEGRAM_DB_PATH ?? DEFAULT_SHARED_DB_PATH,
-    "TELEGRAM_DB_PATH",
-  );
-  const requestedBotDbPath = absolutePath(
-    env.PARILKA_BOT_DB_PATH ?? sharedDbPath,
-    "PARILKA_BOT_DB_PATH",
-  );
-  if (!sameConfiguredFile(requestedBotDbPath, sharedDbPath)) {
-    throw new Error(
-      "PARILKA_BOT_DB_PATH must resolve to the same shared SQLite file as TELEGRAM_DB_PATH.",
-    );
+export function parseBotRuntimeConfig(env: BotRuntimeEnvironment): BotRuntimeConfig {
+  const dbPath = absoluteFilePath(required(env, "PARILKA_BOT_DB_PATH"), "PARILKA_BOT_DB_PATH", false);
+  const sharedDbPath = optional(env, "TELEGRAM_DB_PATH");
+  if (sharedDbPath !== undefined && resolve(sharedDbPath) !== dbPath) {
+    throw new Error("PARILKA_BOT_DB_PATH and TELEGRAM_DB_PATH must name the same shared SQLite file.");
   }
-  const mode = enumValue(
-    env.PARILKA_BOT_MODE,
-    "PARILKA_BOT_MODE",
-    ["live", "shadow"] as const,
-    "shadow",
-  );
-
-  const config: BotRuntimeConfig = {
+  const pollBackoffInitialMs = integer(env, "PARILKA_BOT_POLL_BACKOFF_INITIAL_MS", 1_000, 10, 60_000);
+  const pollBackoffMaxMs = integer(env, "PARILKA_BOT_POLL_BACKOFF_MAX_MS", 30_000, pollBackoffInitialMs, 300_000);
+  const mode = optional(env, "PARILKA_BOT_MODE") ?? "shadow";
+  if (mode !== "live" && mode !== "shadow") {
+    throw new Error("PARILKA_BOT_MODE must be live or shadow.");
+  }
+  const responses = parseBotResponsesRuntimeConfig(env);
+  const rag = parseBotRagRuntimeConfig(env);
+  const token = tokenFromEnvironment(env);
+  if (!/^\d{1,16}:[A-Za-z0-9_-]{20,}$/u.test(token)) {
+    throw new Error("PARILKA_BOT_TOKEN has an invalid Bot API token shape.");
+  }
+  if (optional(env, "PARILKA_BOT_EXCLUSIVE_POLLER") !== "true") {
+    throw new Error("PARILKA_BOT_EXCLUSIVE_POLLER must be exactly true after every other getUpdates poller is stopped.");
+  }
+  return {
     token,
-    exclusivePollerConfirmed: true,
-    allowedChatId,
-    botId,
-    botUsername,
-    botDisplayName: boundedPlain(
-      env.PARILKA_BOT_DISPLAY_NAME ?? "Машина",
-      "PARILKA_BOT_DISPLAY_NAME",
-      128,
-    ),
-    chatTitle: boundedPlain(
-      env.PARILKA_BOT_CHAT_TITLE ??
-        "Frontend228 + ML + Math + 1984",
-      "PARILKA_BOT_CHAT_TITLE",
-      160,
-    ),
-    historyDescription: boundedPlain(
-      env.PARILKA_BOT_HISTORY_DESCRIPTION ??
-        "вся доступная локальная история чата",
-      "PARILKA_BOT_HISTORY_DESCRIPTION",
-      200,
-    ),
-    ...(env.PARILKA_BOT_APPROXIMATE_MEMBER_COUNT === undefined
-      ? {}
-      : {
-          approximateMemberCount: integer(
-            env.PARILKA_BOT_APPROXIMATE_MEMBER_COUNT,
-            "PARILKA_BOT_APPROXIMATE_MEMBER_COUNT",
-            1,
-            1,
-            10_000_000,
-          ),
-        }),
-    memoryWriteAuthorizerIds: telegramIdList(
-      env.PARILKA_BOT_MEMORY_WRITE_SENDER_IDS,
-      "PARILKA_BOT_MEMORY_WRITE_SENDER_IDS",
-      16,
-    ),
-    // Always return the common spelling, including hard-link aliases.
-    dbPath: sharedDbPath,
-    modelConfigPath: existingAbsoluteFile(
-      requiredPlain(env, "PARILKA_BOT_MODEL_CONFIG_PATH"),
-      "PARILKA_BOT_MODEL_CONFIG_PATH",
-    ),
-    ...optionalWebSearchConfig(env),
-    ...optionalResearchGatewayConfig(env),
-    audioTranscribe: audioTranscribeConfig(env),
-    searxngEndpoint: requireLoopbackHttpOrigin(
-      env.PARILKA_BOT_SEARXNG_ENDPOINT ?? "http://127.0.0.1:8080",
-    ),
-    firecrawlEndpoint: requireLoopbackHttpOrigin(
-      env.PARILKA_BOT_FIRECRAWL_ENDPOINT ?? "http://127.0.0.1:3002",
-    ),
+    allowedChatId: telegramChatId(required(env, "PARILKA_BOT_CHAT_ID"), "PARILKA_BOT_CHAT_ID"),
+    botId: positiveTelegramId(required(env, "PARILKA_BOT_ID"), "PARILKA_BOT_ID"),
+    botUsername: botUsername(required(env, "PARILKA_BOT_USERNAME")),
+    dbPath,
     mode,
-    workerConcurrency: integer(
-      env.PARILKA_BOT_WORKERS,
-      "PARILKA_BOT_WORKERS",
-      3,
-      1,
-      3,
-    ),
-    triggerCooldownMs: integer(
-      env.PARILKA_BOT_TRIGGER_COOLDOWN_MS,
-      "PARILKA_BOT_TRIGGER_COOLDOWN_MS",
-      5_000,
-      0,
-      60_000,
-    ),
-    updateMaxAttempts: integer(
-      env.PARILKA_BOT_UPDATE_MAX_ATTEMPTS,
-      "PARILKA_BOT_UPDATE_MAX_ATTEMPTS",
-      3,
-      1,
-      20,
-    ),
-    ...(env.PARILKA_BOT_INITIAL_OFFSET === undefined
-      ? {}
-      : {
-          initialOffset: integer(
-            env.PARILKA_BOT_INITIAL_OFFSET,
-            "PARILKA_BOT_INITIAL_OFFSET",
-            0,
-            0,
-            Number.MAX_SAFE_INTEGER - 1,
-          ),
-        }),
-    pollTimeoutSec: integer(
-      env.PARILKA_BOT_POLL_TIMEOUT_SEC,
-      "PARILKA_BOT_POLL_TIMEOUT_SEC",
-      30,
-      1,
-      50,
-    ),
-    pollLimit: integer(
-      env.PARILKA_BOT_POLL_LIMIT,
-      "PARILKA_BOT_POLL_LIMIT",
-      100,
-      1,
-      100,
-    ),
-    pollBackoffInitialMs: integer(
-      env.PARILKA_BOT_POLL_BACKOFF_INITIAL_MS,
-      "PARILKA_BOT_POLL_BACKOFF_INITIAL_MS",
-      1_000,
-      10,
-      60_000,
-    ),
-    pollBackoffMaxMs: integer(
-      env.PARILKA_BOT_POLL_BACKOFF_MAX_MS,
-      "PARILKA_BOT_POLL_BACKOFF_MAX_MS",
-      30_000,
-      10,
-      5 * 60_000,
-    ),
-    modelStepTimeoutMs: integer(
-      env.PARILKA_BOT_MODEL_STEP_TIMEOUT_MS,
-      "PARILKA_BOT_MODEL_STEP_TIMEOUT_MS",
-      180_000,
-      1_000,
-      15 * 60_000,
-    ),
-    publishTimeoutMs: integer(
-      env.PARILKA_BOT_PUBLISH_TIMEOUT_MS,
-      "PARILKA_BOT_PUBLISH_TIMEOUT_MS",
-      30_000,
-      1_000,
-      5 * 60_000,
-    ),
-    shutdownTimeoutMs: integer(
-      env.PARILKA_BOT_SHUTDOWN_TIMEOUT_MS,
-      "PARILKA_BOT_SHUTDOWN_TIMEOUT_MS",
-      660_000,
-      1_000,
-      15 * 60_000,
-    ),
+    // A chat's messages must retain their delivery order, including while a
+    // Responses turn makes sequential local-tool continuations.
+    workerConcurrency: integer(env, "PARILKA_BOT_WORKERS", 1, 1, 1),
+    triggerCooldownMs: integer(env, "PARILKA_BOT_TRIGGER_COOLDOWN_MS", 5_000, 0, 60_000),
+    updateMaxAttempts: integer(env, "PARILKA_BOT_UPDATE_MAX_ATTEMPTS", 3, 1, 20),
+    ...(optional(env, "PARILKA_BOT_INITIAL_OFFSET") === undefined ? {} : {
+      initialOffset: integer(env, "PARILKA_BOT_INITIAL_OFFSET", 0, 0, Number.MAX_SAFE_INTEGER - 1),
+    }),
+    pollTimeoutSec: integer(env, "PARILKA_BOT_POLL_TIMEOUT_SEC", 30, 1, 50),
+    pollLimit: integer(env, "PARILKA_BOT_POLL_LIMIT", 100, 1, 100),
+    pollBackoffInitialMs,
+    pollBackoffMaxMs,
+    publishTimeoutMs: integer(env, "PARILKA_BOT_PUBLISH_TIMEOUT_MS", 30_000, 1_000, 300_000),
+    shutdownTimeoutMs: integer(env, "PARILKA_BOT_SHUTDOWN_TIMEOUT_MS", 660_000, 1_000, 900_000),
+    responses,
+    rag,
   };
-  validateBotRuntimeRelationships(config);
-  return config;
+}
+
+export function safeBotRuntimeConfig(config: BotRuntimeConfig): SafeBotRuntimeConfig {
+  return {
+    allowedChatId: config.allowedChatId,
+    botId: config.botId,
+    botUsername: config.botUsername,
+    dbPath: config.dbPath,
+    mode: config.mode,
+    workerConcurrency: config.workerConcurrency,
+    pollTimeoutSec: config.pollTimeoutSec,
+    pollLimit: config.pollLimit,
+    responses: safeBotResponsesRuntimeConfig(config.responses),
+    rag: {
+      backend: "local_bge_m3",
+      localEndpoint: config.rag.vector.embeddings.localEndpoint,
+      localRequestTimeoutMs: config.rag.vector.embeddings.localRequestTimeoutMs,
+      rerankTimeoutMs: config.rag.vector.embeddings.rerankTimeoutMs,
+      rerankMaxCandidates: config.rag.rerankMaxCandidates,
+      automaticTimeoutMs: config.rag.automaticTimeoutMs,
+    },
+  };
+}
+
+function tokenFromEnvironment(env: BotRuntimeEnvironment): string {
+  const direct = optional(env, "PARILKA_BOT_TOKEN");
+  const file = optional(env, "PARILKA_BOT_TOKEN_FILE");
+  if (direct !== undefined && file !== undefined) {
+    throw new Error("Set exactly one of PARILKA_BOT_TOKEN or PARILKA_BOT_TOKEN_FILE.");
+  }
+  if (direct !== undefined) return direct;
+  if (file === undefined) throw new Error("PARILKA_BOT_TOKEN or PARILKA_BOT_TOKEN_FILE is required.");
+  const path = absoluteFilePath(file, "PARILKA_BOT_TOKEN_FILE", true);
+  const beforeOpen = lstatSync(path);
+  const uid = process.getuid?.();
+  if (uid === undefined || beforeOpen.isSymbolicLink() || !beforeOpen.isFile() || beforeOpen.uid !== uid) {
+    throw new Error("PARILKA_BOT_TOKEN_FILE must be an owner-owned regular non-symlink file.");
+  }
+  const descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  let raw: string;
+  try {
+    const metadata = fstatSync(descriptor);
+    if (!metadata.isFile() || metadata.uid !== uid) {
+      throw new Error("PARILKA_BOT_TOKEN_FILE must be an owner-owned regular non-symlink file.");
+    }
+    if ((metadata.mode & 0o777) !== 0o400 && (metadata.mode & 0o777) !== 0o600) {
+      throw new Error("PARILKA_BOT_TOKEN_FILE must have mode 0400 or 0600.");
+    }
+    if (metadata.size < 1 || metadata.size > 4_096) throw new Error("PARILKA_BOT_TOKEN_FILE must be a bounded one-line file.");
+    raw = readFileSync(descriptor, "utf8");
+  } finally {
+    closeSync(descriptor);
+  }
+  if (!/^[^\r\n]+(?:\n)?$/u.test(raw)) throw new Error("PARILKA_BOT_TOKEN_FILE must contain one token line.");
+  return raw.endsWith("\n") ? raw.slice(0, -1) : raw;
+}
+
+function required(env: BotRuntimeEnvironment, name: string): string {
+  const value = optional(env, name);
+  if (value === undefined) throw new Error(`${name} is required.`);
+  return value;
+}
+function optional(env: BotRuntimeEnvironment, name: string): string | undefined {
+  const value = env[name]?.trim();
+  return value ? value : undefined;
+}
+function integer(env: BotRuntimeEnvironment, name: string, fallback: number, min: number, max: number): number {
+  const raw = optional(env, name);
+  const value = raw === undefined ? fallback : Number(raw);
+  if (!Number.isSafeInteger(value) || value < min || value > max) throw new Error(`${name} must be an integer between ${min} and ${max}.`);
+  return value;
+}
+function absoluteFilePath(value: string, name: string, mustExist: boolean): string {
+  if (!isAbsolute(value)) throw new Error(`${name} must be an absolute path.`);
+  const path = resolve(value);
+  if (mustExist) {
+    let stat;
+    try { stat = statSync(path); } catch { throw new Error(`${name} must be an existing regular file.`); }
+    if (!stat.isFile()) throw new Error(`${name} must be an existing regular file.`);
+  }
+  return path;
+}
+function positiveTelegramId(value: string, name: string): string {
+  if (!/^\d+$/u.test(value) || BigInt(value) < 1n || BigInt(value) > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error(`${name} must be a positive Telegram id.`);
+  return BigInt(value).toString();
+}
+function telegramChatId(value: string, name: string): string {
+  if (!/^-?\d+$/u.test(value)) throw new Error(`${name} must be a Telegram chat id.`);
+  return BigInt(value).toString();
+}
+function botUsername(value: string): string {
+  const normalized = value.replace(/^@/u, "");
+  if (!/^[A-Za-z0-9_]{5,32}$/u.test(normalized)) throw new Error("PARILKA_BOT_USERNAME must be a valid Telegram username.");
+  return normalized;
 }

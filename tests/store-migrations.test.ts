@@ -31,11 +31,11 @@ test("old fixture DB migrates once and rebuilds FTS for historical rows", (t) =>
 
   const store = new MessageStore(dbPath);
 
-  assert.equal(store.getSchemaVersion(), 22);
+  assert.equal(store.getSchemaVersion(), 23);
   assert.equal(store.search({ chatId: "-1001", query: "historical", limit: 10 }).length, 1);
 
   const reopened = new MessageStore(dbPath);
-  assert.equal(reopened.getSchemaVersion(), 22);
+  assert.equal(reopened.getSchemaVersion(), 23);
   assert.equal(reopened.search({ chatId: "-1001", query: "searchable", limit: 10 })[0]?.messageId, 1);
 });
 
@@ -162,7 +162,7 @@ test("version 5 fixture without send tables migrates send audit schema", (t) => 
 
   const store = new MessageStore(dbPath);
 
-  assert.equal(store.getSchemaVersion(), 22);
+  assert.equal(store.getSchemaVersion(), 23);
   assert.equal(store.search({ chatId: "-1001", query: "preexisting", limit: 10 })[0]?.messageId, 1);
   assert.equal(store.countMessages("-1001"), 1);
   const [legacyStats] = store.getEmbeddingStats("-1001");
@@ -238,7 +238,7 @@ test("stale managed FTS and trigger definitions are repaired", (t) => {
   db.close();
 
   const repaired = new MessageStore(dbPath);
-  assert.equal(repaired.getSchemaVersion(), 22);
+  assert.equal(repaired.getSchemaVersion(), 23);
   assert.equal(repaired.search({ chatId: "-1001", query: "repaired", limit: 10 })[0]?.messageId, 1);
   repaired.upsertMessages(
     { chatId: "-1001", requested: "-1001", kind: "Fake" },
@@ -342,7 +342,7 @@ test("large embedding membership migration is deferred with maintenance status",
   db.close();
 
   const migrated = new MessageStore(dbPath);
-  assert.equal(migrated.getSchemaVersion(), 22);
+  assert.equal(migrated.getSchemaVersion(), 23);
   const job = migrated.getMaintenanceJobs().find((item) => item.name === "embedding_chunk_membership_backfill");
   assert.equal(job?.status, "pending");
   assert.equal(job?.details?.chunkCount, 1001);

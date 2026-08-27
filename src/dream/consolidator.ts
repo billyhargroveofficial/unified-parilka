@@ -1,4 +1,3 @@
-import type { DigestModelRouter } from "../digests.js";
 import type {
   StoredChatMemory,
   StoredDreamDay,
@@ -18,6 +17,7 @@ import { selectDreamInteractions, type DreamSelectorStore } from "./selector.js"
 import { shortenDreamMemoryBlock } from "./shorten-memory.js";
 import type { DreamKnowledgeStore } from "./skill-manager.js";
 import { StagedKnowledgeOverlay } from "./staged-knowledge.js";
+import type { DreamTextRunner } from "./text-runner.js";
 
 const DEFAULT_MAX_INPUT_CHARS = 120_000;
 const DEFAULT_MAX_MEMORY_CHARS = 2_000;
@@ -42,7 +42,8 @@ export interface DreamConsolidatorStore
 }
 
 export interface DreamConsolidatorOptions {
-  router: DigestModelRouter;
+  /** Production direct model text-runner boundary. */
+  textRunner: DreamTextRunner;
   botSenderId: string;
   maxInputChars?: number;
   maxMemoryChars?: number;
@@ -102,7 +103,7 @@ export type DreamResult =
     };
 
 export class DreamConsolidator {
-  readonly #router: DigestModelRouter;
+  readonly #textRunner: DreamTextRunner;
   readonly #botSenderId: string;
   readonly #maxInputChars: number;
   readonly #maxMemoryChars: number;
@@ -116,7 +117,7 @@ export class DreamConsolidator {
   readonly #shortenMemory: typeof shortenDreamMemoryBlock;
 
   constructor(options: DreamConsolidatorOptions) {
-    this.#router = options.router;
+    this.#textRunner = options.textRunner;
     this.#botSenderId = options.botSenderId;
     this.#runReview = options.runReview ?? runDreamReview;
     this.#shortenMemory = options.shortenMemory ?? shortenDreamMemoryBlock;
@@ -340,7 +341,7 @@ export class DreamConsolidator {
       });
       try {
         const review = await this.#runReview({
-          router: this.#router,
+          textRunner: this.#textRunner,
           store: dayStage,
           chatId,
           sourceMessageId: batch.sourceMessageId,
@@ -375,7 +376,7 @@ export class DreamConsolidator {
         let shortened = false;
         if (final.length > this.#maxMemoryChars) {
           const shortenedResult = await this.#shortenMemory({
-            router: this.#router,
+            textRunner: this.#textRunner,
             block: final,
             maxChars: this.#maxMemoryChars,
             maxOutputTokens: this.#maxOutputTokens,

@@ -135,6 +135,7 @@ export class BotWorkerPump implements BotWorkNotifier {
           this.#scheduleRetryWakeup(result.retryAfterMs);
         }
         if (
+          this.#state !== "stopped" &&
           result.status !== "idle" &&
           result.status !== "capacity"
         ) {

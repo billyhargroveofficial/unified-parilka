@@ -1,10 +1,6 @@
 import type {
   MessageStore,
-  StoredChatLesson,
   StoredBotTurn,
-  StoredChatMemory,
-  StoredChatSkill,
-  StoredFastChatMemory,
   StoredMessage,
 } from "../../store.js";
 import type {
@@ -26,10 +22,6 @@ export interface LoadedBotTurn {
   replyTarget?: StoredMessage;
   context: StoredMessage[];
   replay: StoredMessage[];
-  memory?: StoredChatMemory;
-  fastMemory: StoredFastChatMemory[];
-  longTermLessons: StoredChatLesson[];
-  chatSkills: StoredChatSkill[];
 }
 
 export function loadBotTurn(
@@ -63,7 +55,6 @@ export function loadBotTurn(
     limit: BOT_REPLAY_MESSAGES,
     order: "asc",
   });
-  const memory = store.getChatMemory(turn.chatId);
   const replyTarget = trigger.replyToMessageId === undefined
     ? undefined
     : store.getMessagesByIds({
@@ -75,10 +66,6 @@ export function loadBotTurn(
     ...(replyTarget === undefined ? {} : { replyTarget }),
     context: [...previous, trigger],
     replay,
-    fastMemory: store.listFastChatMemory(turn.chatId),
-    longTermLessons: store.listChatLessons(turn.chatId, 12),
-    chatSkills: store.listChatSkills(turn.chatId, 12),
-    ...(memory === undefined ? {} : { memory }),
   };
 }
 
