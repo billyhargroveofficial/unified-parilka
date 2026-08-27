@@ -33,12 +33,17 @@ import {
   type LocalFunctionResult,
   type CodexSubscriptionUsageSnapshot,
   OPENAI_RESPONSES_INTERACTIVE_REASONING_EFFORT,
+  OPENAI_RESPONSES_MODEL,
+  OPENAI_RESPONSES_SUBSCRIPTION_SERVICE_TIER,
+  ResponsesTurnTimeoutError,
   type ResponsesProgressEvent,
   type RunResponsesTurnRequest,
   type RunResponsesTurnResult,
 } from "../openai-responses/index.js";
 
 const DEFAULT_TURN_TIMEOUT_MS = 180_000;
+const TURN_TIMEOUT_REPLY =
+  "Не успел закончить ответ за отведённое время. Отправь запрос ещё раз — начну заново.";
 
 type ResponsesTurnRunner = Pick<
   { run(request: RunResponsesTurnRequest): Promise<RunResponsesTurnResult> },
@@ -86,6 +91,7 @@ export class ResponsesBotTurnAgent implements BotTurnAgent {
   async run(request: BotAgentRequest): Promise<BotAgentFinalResult> {
     const startedAtMs = Date.now();
     const progress = new ResponsesTelegramProgress(request.toolProgressPort);
+    const observedToolCallIds = new Set<string>();
     // Account quota is independent of the turn. Start it now and consume only
     // a result already available at finalization, so it cannot add latency.
     let usagePromise: Promise<CodexSubscriptionUsageSnapshot | undefined> | undefined;
@@ -136,32 +142,51 @@ export class ResponsesBotTurnAgent implements BotTurnAgent {
         progress.startImage({ itemId: "telegram-input-image", kind: "view" });
       }
       const boundedResearch = requiresBoundedHostedWebResearch(request.trigger.text);
-      const result = await this.#responses.run({
-        text: renderTrustedUserInput(
-          request,
-          causal.packet,
-          this.#now(),
-          requireNonce(this.#nonceFactory()),
-        ),
-        instructions: boundedResearch
-          ? `${PARILKA_RESPONSES_INSTRUCTIONS}\n${PARILKA_BOUNDED_RESEARCH_INSTRUCTIONS}`
-          : PARILKA_RESPONSES_INSTRUCTIONS,
-        effort: OPENAI_RESPONSES_INTERACTIVE_REASONING_EFFORT,
-        localFunctions: localFunctionSchemas(),
-        dispatcher: {
-          dispatch: (call, signal) => this.#dispatchLocalTool(call, request.turn.triggerMessageId, signal),
-        },
-        ...(image === undefined ? {} : { image: { dataUrl: image.dataUrl, detail: "high" as const } }),
-        signal: request.signal,
-        timeoutMs: this.#turnTimeoutMs,
-        maxOutputTokens: 4_096,
-        ...(boundedResearch
-          ? { hostedWebSearchPolicy: "bounded_research" as const }
-          : requiresHostedWebSearchFirstLeg(request.trigger.text)
-            ? { hostedWebSearchPolicy: "required_first_leg" as const }
-          : {}),
-        progress: { onProgress: (event) => forwardProgress(progress, event) },
-      });
+      let result: RunResponsesTurnResult;
+      try {
+        result = await this.#responses.run({
+          text: renderTrustedUserInput(
+            request,
+            causal.packet,
+            this.#now(),
+            requireNonce(this.#nonceFactory()),
+          ),
+          instructions: boundedResearch
+            ? `${PARILKA_RESPONSES_INSTRUCTIONS}\n${PARILKA_BOUNDED_RESEARCH_INSTRUCTIONS}`
+            : PARILKA_RESPONSES_INSTRUCTIONS,
+          effort: OPENAI_RESPONSES_INTERACTIVE_REASONING_EFFORT,
+          localFunctions: localFunctionSchemas(),
+          dispatcher: {
+            dispatch: (call, signal) => this.#dispatchLocalTool(call, request.turn.triggerMessageId, signal),
+          },
+          ...(image === undefined ? {} : { image: { dataUrl: image.dataUrl, detail: "high" as const } }),
+          signal: request.signal,
+          timeoutMs: this.#turnTimeoutMs,
+          maxOutputTokens: 4_096,
+          ...(boundedResearch
+            ? { hostedWebSearchPolicy: "bounded_research" as const }
+            : requiresHostedWebSearchFirstLeg(request.trigger.text)
+              ? { hostedWebSearchPolicy: "required_first_leg" as const }
+            : {}),
+          progress: { onProgress: (event) => {
+            observeToolProgress(event, observedToolCallIds);
+            return forwardProgress(progress, event);
+          } },
+        });
+      } catch (error) {
+        // A lease hand-off or shutdown may abort the direct runtime while its
+        // timeout race settles concurrently. That durable owner no longer
+        // owns publication, so only turn-local (non-aborted) timeouts receive
+        // the one static final below.
+        if (error instanceof ResponsesTurnTimeoutError && !request.signal.aborted) {
+          return await timeoutFinal({
+            startedAtMs,
+            observedToolCalls: observedToolCallIds.size,
+            usagePromise,
+          });
+        }
+        throw error;
+      }
       if (imageStarted) progress.completeImage("telegram-input-image", true);
       const finalText = normalizeResponsesFinalText(result.text);
       const usage = await immediatelyAvailable(usagePromise);
@@ -238,6 +263,57 @@ async function immediatelyAvailable(
   // `Promise.resolve` wins whenever the background fetch is still pending;
   // an already-fulfilled cached fetch wins because it is registered first.
   return Promise.race([usage, Promise.resolve(undefined)]);
+}
+
+async function timeoutFinal(input: Readonly<{
+  startedAtMs: number;
+  observedToolCalls: number;
+  usagePromise: Promise<CodexSubscriptionUsageSnapshot | undefined> | undefined;
+}>): Promise<BotAgentFinalResult> {
+  const usage = await immediatelyAvailable(input.usagePromise);
+  const durationMs = Math.max(0, Date.now() - input.startedAtMs);
+  const text = formatResponsesBotFinalReply({
+    modelText: TURN_TIMEOUT_REPLY,
+    causalSources: [],
+    citations: [],
+    statusFooter: renderResponsesStatusFooter({
+      ...(usage === undefined ? {} : { usage }),
+      toolCalls: input.observedToolCalls,
+      durationMs,
+    }),
+  });
+  assertBotAgentFinalReplyWithinLimit(text);
+  return {
+    kind: "final",
+    text,
+    telemetry: {
+      finalModelId: OPENAI_RESPONSES_MODEL,
+      finalProviderId: "openai-responses",
+      serviceTier: OPENAI_RESPONSES_SUBSCRIPTION_SERVICE_TIER,
+      steps: [],
+      toolCalls: input.observedToolCalls,
+      durationMs,
+      incomplete: true,
+    },
+  };
+}
+
+function observeToolProgress(
+  event: ResponsesProgressEvent,
+  observedToolCallIds: Set<string>,
+): void {
+  switch (event.type) {
+    case "hosted_web_started":
+    case "hosted_web_action":
+    case "hosted_web_completed":
+    case "local_function_started":
+    case "local_function_completed":
+      observedToolCallIds.add(event.callId);
+      break;
+    case "thinking_started":
+    case "thinking_completed":
+      break;
+  }
 }
 
 function localFunctionSchemas(): RunResponsesTurnRequest["localFunctions"] {

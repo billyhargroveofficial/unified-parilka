@@ -63,6 +63,12 @@ three strict completed evidence actions plus the fetch attempt exist, a stalled
 or failed remaining action can fall back to synthesis with an explicit
 uncertainty instruction. Below that floor the host refuses publication, and a
 caller/global timeout is terminal instead of replaying progress.
+The same bounded path is selected for a public arXiv paper URL when the user
+explicitly asks for a detailed study/analysis; a generic link explanation stays
+single-pass. If the complete Responses turn nevertheless reaches its hard
+timeout while the durable worker still owns it, the agent publishes one static
+incomplete timeout notice through the normal durable sender. It never repeats
+the model or its tools, and cancellation/lease loss never publishes that notice.
 Generic requests for detail remain single-pass.
 The live subscription stream exposes each action early enough for that cutoff;
 a terminal-only adapter can only account for extra actions already completed

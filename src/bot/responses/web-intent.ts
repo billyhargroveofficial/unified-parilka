@@ -13,6 +13,15 @@ const EXPLICIT_RESEARCH = /(?<![\p{L}\p{N}_])(?:deep[\s_-]?(?:dive|research)|д�
 const NEGATED_RESEARCH = /(?<![\p{L}\p{N}_])(?:без|не\s+(?:делай|делать|проводи|проводить|нужен|нужно|надо))\s+(?:(?:делать|проводить)\s+)?(?:(?:deep|дип|глубок\p{L}*|детальн\p{L}*|тщательн\p{L}*)[\s_-]+)?(?:(?:web|веб)[\s_-]+)?(?:dive|дайв|deepdive|дипдайв|research|ресерч\p{L}*|исследован\p{L}*)(?![\p{L}\p{N}_])/iu;
 const EXPLICIT_WEB_PROHIBITION = /(?<![\p{L}\p{N}_])(?:без\s+(?:web|веба|интернета|веб[\s_-]?поиска)|не\s+(?:используй|использовать|делай|делать)\s+(?:web|веб|интернет|веб[\s_-]?поиск)|не\s+(?:нужно|надо|следует)\s+(?:использовать|делать)\s+(?:web|веб|интернет|веб[\s_-]?поиск)|(?:web|веб|интернет|веб[\s_-]?поиск)\s+(?:использовать\s+)?не\s+(?:используй|использовать|нужен|нужно|надо|следует))(?![\p{L}\p{N}_])/iu;
 const LOCAL_RESEARCH_SCOPE = /(?<![\p{L}\p{N}_])(?:по\s+(?:истории\s+(?:этого\s+)?чата|(?:этой\s+)?переписке)|(?:по|из|на\s+основе)\s+(?:этого|этой|приложенного|приложенной)\s+(?:файла|документа|скрина|изображения))(?![\p{L}\p{N}_])/iu;
+// A public arXiv link plus an explicit request to study the paper is a
+// research request even when the user does not use the literal word
+// "research". Keep this deliberately narrow: a generic detailed explanation
+// must retain the fast conversational path.
+const PUBLIC_ARXIV_URL = /https?:\/\/(?:www\.)?arxiv\.org\/(?:abs|pdf)\/\d{4}\.\d{4,5}(?:v\d+)?(?:\.pdf)?(?:[?#][^\s]*)?/iu;
+const PAPER_TERM = /(?<![\p{L}\p{N}_])(?:стать\p{L}*|paper|пейпер)(?![\p{L}\p{N}_])/iu;
+const PAPER_STUDY_TERM = /(?<![\p{L}\p{N}_])(?:изуч\p{L}*|анализ\p{L}*|разбор\p{L}*|разбира\p{L}*)(?![\p{L}\p{N}_])/iu;
+const DETAILED_STUDY_TERM = /(?<![\p{L}\p{N}_])(?:детальн\p{L}*|подробн\p{L}*|тщательн\p{L}*|глубок\p{L}*)(?![\p{L}\p{N}_])/iu;
+const NEGATED_PAPER_STUDY = /(?<![\p{L}\p{N}_])(?:(?:без|не\s+(?:делай|делать|проводи|проводить|нужно|надо|следует))\s+(?:\p{L}+\s+){0,4}(?:изуч\p{L}*|анализ\p{L}*|разбор\p{L}*|разбира\p{L}*)|не\s+(?:изуч\p{L}*|анализ\p{L}*|разбира\p{L}*)(?:\s+\p{L}+){0,4})(?![\p{L}\p{N}_])/giu;
 
 export function requiresHostedWebSearchFirstLeg(text: string | undefined): boolean {
   if (typeof text !== "string") return false;
@@ -32,7 +41,17 @@ export function requiresHostedWebSearchFirstLeg(text: string | undefined): boole
 export function requiresBoundedHostedWebResearch(text: string | undefined): boolean {
   if (typeof text !== "string") return false;
   const normalized = text.replace(/\0/gu, " ").trim();
-  if (normalized === "" || !EXPLICIT_RESEARCH.test(normalized) || NEGATED_RESEARCH.test(normalized)) return false;
+  const positivePaperStudy = normalized.replace(NEGATED_PAPER_STUDY, " ");
+  const publicPaperStudy =
+    PUBLIC_ARXIV_URL.test(normalized) &&
+    PAPER_TERM.test(positivePaperStudy) &&
+    PAPER_STUDY_TERM.test(positivePaperStudy) &&
+    DETAILED_STUDY_TERM.test(positivePaperStudy);
+  if (
+    normalized === "" ||
+    (!EXPLICIT_RESEARCH.test(normalized) && !publicPaperStudy) ||
+    NEGATED_RESEARCH.test(normalized)
+  ) return false;
   const explicitlyRequiresWeb = requiresHostedWebSearchFirstLeg(normalized);
   if (!explicitlyRequiresWeb && (EXPLICIT_WEB_PROHIBITION.test(normalized) || LOCAL_RESEARCH_SCOPE.test(normalized))) {
     return false;

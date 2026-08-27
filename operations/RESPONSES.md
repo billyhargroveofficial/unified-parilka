@@ -58,6 +58,12 @@ available, a slow, failed or redundant fourth attempt may hand those bounded
 results to the finalizer with an uncertainty instruction; below that floor the
 host refuses publication. Caller/global cancellation wins over this fallback,
 and no timeout replays a second visible attempt.
+An explicit detailed study/analysis of a public `arxiv.org/abs|pdf` paper URL
+also selects this bounded path; ordinary link explanation does not. If the
+complete Responses turn still reaches its hard timeout while the durable worker
+owns it, the agent returns one host-owned incomplete notice through the normal
+draft/sending/publication path. The model and its tools are not replayed;
+external cancellation or lease loss never publishes the notice.
 Production subscription SSE exposes granular action items, so the host can cut
 at that boundary. A terminal-only adapter can only report already-completed
 extras and must keep their Telegram tool count truthful.

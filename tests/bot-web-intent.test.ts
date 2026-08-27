@@ -62,9 +62,24 @@ test("explicit deep-research wording opts into bounded hosted research", () => {
   }
 });
 
+test("a public arXiv paper explicitly requested for detailed study opts into bounded research", () => {
+  for (const text of [
+    "https://arxiv.org/abs/2608.25593 @bichiycepenstotri_bot объяснить что за пейпер и чем полезен детальное изучение",
+    "https://arxiv.org/abs/2508.08077 paper: сделай детальное изучение",
+    "Нужно детальное изучение этой статьи https://arxiv.org/pdf/2508.08077v2.pdf",
+    "Изучи статью https://arxiv.org/abs/2508.08077 детально",
+    "Сделай подробный разбор статьи https://arxiv.org/abs/2508.08077",
+  ]) {
+    assert.equal(requiresBoundedHostedWebResearch(text), true, text);
+  }
+});
+
 test("generic detail and explicitly local or no-web research stay off the bounded path", () => {
   for (const text of [
     "Подробно расскажи про BMW",
+    "Сделай детальное изучение статьи без публичной arXiv-ссылки",
+    "Сделай детальное изучение статьи https://example.test/paper",
+    "Изучи статью https://arxiv.org/abs/2508.08077",
     "Подбери тачку за миллион",
     "Сравни две машины",
     "Сделай дип дайв по истории этого чата",
@@ -77,6 +92,11 @@ test("generic detail and explicitly local or no-web research stay off the bounde
     "Without tools: не проводи deep web research",
     "Веб не используй, проведи глубокое исследование по приложенному файлу",
     "Не нужно использовать интернет, сделай deep research по своим знаниям",
+    "Без веба сделай детальное изучение статьи https://arxiv.org/abs/2508.08077",
+    "Сделай детальное изучение статьи из приложенного документа https://arxiv.org/abs/2508.08077",
+    "Статья: не делай детальное изучение https://arxiv.org/abs/2508.08077",
+    "https://arxiv.org/abs/2508.08077 — статья, не нужно её детально изучать",
+    "Не анализируй статью https://arxiv.org/abs/2508.08077 подробно",
     undefined,
   ]) {
     assert.equal(requiresBoundedHostedWebResearch(text), false, String(text));

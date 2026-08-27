@@ -66,6 +66,9 @@ rendered as at most four safe distinct-page links; tracking variants collapse
 without merging semantic query records. The final formatter reserves citation/status
 space and clips only pathological provider text at a Unicode boundary, so the
 durable worker always receives an envelope within both UTF-16 and UTF-8 caps.
+A true Responses hard timeout becomes one host-owned incomplete final through
+that same durable publisher, never a silent dead letter or a second model run;
+owner cancellation still aborts without publication.
 
 Focused tests live under `tests/bot-responses-*.test.ts`,
 `tests/responses-telegram-*.test.ts`, `tests/bot-causal-rag-*.test.ts` and
