@@ -59,7 +59,13 @@ parallel items of the same action and native multi-query search batches. The
 message is edited and removed before the
 final native rich Markdown reply; if Telegram cannot confirm deletion, its exact message id
 remains a terminal durable fence and is retried at a bounded cadence without
-blocking the final reply. Web citations are rendered as safe clickable links.
+blocking the final reply. Each transient operation and stale-cleanup attempt is
+also host-deadlined at five seconds; a timed-out unknown send freezes further
+progress, while a late known ACK is compensated best-effort. Web citations are
+rendered as at most four safe distinct-page links; tracking variants collapse
+without merging semantic query records. The final formatter reserves citation/status
+space and clips only pathological provider text at a Unicode boundary, so the
+durable worker always receives an envelope within both UTF-16 and UTF-8 caps.
 
 Focused tests live under `tests/bot-responses-*.test.ts`,
 `tests/responses-telegram-*.test.ts`, `tests/bot-causal-rag-*.test.ts` and

@@ -4,6 +4,7 @@ import {
   type BotAgentRequest,
   type BotTurnAgent,
 } from "../bot/agent-contract.js";
+import { formatResponsesBotFinalReply } from "./final-reply.js";
 import { randomUUID } from "node:crypto";
 import type { CausalRagContextBuilder } from "../bot/causal-rag/index.js";
 import type { BotMediaTools } from "../bot/media-tools.js";
@@ -17,9 +18,7 @@ import {
 } from "../bot/responses/web-intent.js";
 import { normalizeResponsesFinalText } from "../bot/responses/final-text.js";
 import {
-  renderTelegramCausalAttributions,
   renderResponsesStatusFooter,
-  renderTelegramUrlCitations,
   ResponsesTelegramProgress,
   type ValidatedLocalToolName,
 } from "../bot/responses-telegram/index.js";
@@ -165,19 +164,23 @@ export class ResponsesBotTurnAgent implements BotTurnAgent {
       });
       if (imageStarted) progress.completeImage("telegram-input-image", true);
       const finalText = normalizeResponsesFinalText(result.text);
-      const visible = `${renderTelegramCausalAttributions(finalText, causal.sources)}${renderTelegramUrlCitations(result.annotations.map((annotation) => ({
-        type: "url_citation" as const, url: annotation.url, title: annotation.title,
-      })), finalText)}`;
       const usage = await immediatelyAvailable(usagePromise);
       const telemetryUsage = result.aggregateUsage ?? result.usage;
       const toolCalls = result.functionCalls + result.hostedWebCalls;
       const durationMs = Math.max(0, Date.now() - startedAtMs);
-      const text = `${visible}${renderResponsesStatusFooter({
-        ...(result.usage === undefined ? {} : { inputTokens: result.usage.inputTokens }),
-        ...(usage === undefined ? {} : { usage }),
-        toolCalls,
-        durationMs,
-      })}`;
+      const text = formatResponsesBotFinalReply({
+        modelText: finalText,
+        causalSources: causal.sources,
+        citations: result.annotations.map((annotation) => ({
+          type: "url_citation" as const, url: annotation.url, title: annotation.title,
+        })),
+        statusFooter: renderResponsesStatusFooter({
+          ...(result.usage === undefined ? {} : { inputTokens: result.usage.inputTokens }),
+          ...(usage === undefined ? {} : { usage }),
+          toolCalls,
+          durationMs,
+        }),
+      });
       assertBotAgentFinalReplyWithinLimit(text);
       completed = true;
       return {

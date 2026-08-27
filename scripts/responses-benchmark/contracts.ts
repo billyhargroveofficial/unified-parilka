@@ -80,10 +80,11 @@ export interface BenchmarkReport {
 }
 
 export interface BenchmarkMethodology {
-  readonly directArm: "minimal_direct_responses_no_telegram";
-  readonly nativeArm: "fresh_codex_exec_process";
-  readonly connectionMode: "direct_reused_transport_client_vs_native_fresh_process";
-  readonly armOrder: "alternating_sequence_effect_distribution_only";
+  readonly directArm: "fresh_minimal_direct_responses_transport_client_per_arm_no_telegram";
+  readonly nativeArm: "fresh_codex_exec_process_and_cwd_per_arm";
+  /** Fresh logical clients, not a claim that a process-wide HTTP pool is cold. */
+  readonly connectionMode: "fresh_direct_transport_client_per_arm_vs_native_fresh_process";
+  readonly armOrder: "alternating_fresh_logical_executions_distribution_only";
   readonly nativeActionFidelity: "limited_cli_jsonl_omits_open_find_semantics";
   readonly nativeCliVersion?: string;
 }

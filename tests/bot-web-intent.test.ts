@@ -54,6 +54,8 @@ test("explicit deep-research wording opts into bounded hosted research", () => {
     "Сделай дип-дайв ресерч цен на тачки в августе 2026",
     "Нужно глубокое исследование рынка квартир",
     "Проведи нереальный дип дайв ресерч и выдай лучший вариант",
+    "проведи глубокий веб-ресерч по официальным источникам",
+    "deep web research current Node.js LTS",
     "deep_research current GPU prices",
   ]) {
     assert.equal(requiresBoundedHostedWebResearch(text), true, text);
@@ -71,6 +73,8 @@ test("generic detail and explicitly local or no-web research stay off the bounde
     "Не делай дип-дайв ресерч, ответь коротко",
     "Без дип-дайв ресерча, ответь из памяти",
     "Не нужно проводить исследование, ответь из памяти",
+    "Не делай глубокий веб-ресерч, ответь из памяти",
+    "Without tools: не проводи deep web research",
     "Веб не используй, проведи глубокое исследование по приложенному файлу",
     "Не нужно использовать интернет, сделай deep research по своим знаниям",
     undefined,

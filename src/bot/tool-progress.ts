@@ -1,6 +1,14 @@
 import { renderProgressText } from "./tool-progress-render.js";
+import {
+  defaultPresentationScheduler,
+  runPresentationWithinDeadline,
+  waitForSchedulerDelay,
+  type PresentationDeadlineOutcome,
+  type PresentationScheduler,
+} from "./presentation-deadline.js";
 
 export { renderProgressText } from "./tool-progress-render.js";
+export type { PresentationScheduler as ToolProgressScheduler } from "./presentation-deadline.js";
 
 /**
  * Bounded, persisted Telegram tool-progress message.
@@ -80,11 +88,7 @@ export interface ToolProgressStore {
   clearBotTurnProgress(turnId: number, nowMs?: number): boolean;
 }
 
-/** Narrow timer boundary so visibility timing stays deterministic in tests. */
-export interface ToolProgressScheduler {
-  setTimeout(callback: () => void, delayMs: number): unknown;
-  clearTimeout(handle: unknown): void;
-}
+type ToolProgressScheduler = PresentationScheduler;
 
 export type ToolProgressState =
   | "none"
@@ -103,6 +107,8 @@ export interface ToolProgressPublisherOptions {
   maxTextLength?: number;
   /** Kept deliberately short: it is presentation polish, not a second timeout. */
   minVisibleMs?: number;
+  /** Hard deadline for one best-effort Telegram presentation operation. */
+  operationTimeoutMs?: number;
   now?: () => number;
   scheduler?: ToolProgressScheduler;
 }
@@ -118,6 +124,8 @@ export interface ToolCallStatus {
 
 const DEFAULT_MAX_TEXT_LENGTH = 3_500;
 export const DEFAULT_PROGRESS_MIN_VISIBLE_MS = 1_000;
+/** Presentation transport is never allowed to consume the durable final budget. */
+export const DEFAULT_PROGRESS_OPERATION_TIMEOUT_MS = 5_000;
 const MAX_PROGRESS_MIN_VISIBLE_MS = 1_200;
 /**
  * Hard presentation budget per turn. A normal eight-function Responses turn
@@ -145,12 +153,14 @@ export class ToolProgressPublisher implements ToolProgressPort {
   readonly #store: ToolProgressStore;
   readonly #maxTextLength: number;
   readonly #minVisibleMs: number;
+  readonly #operationTimeoutMs: number;
   readonly #now: () => number;
   readonly #scheduler: ToolProgressScheduler;
   #messageId: number | undefined;
   #state: ToolProgressState = "none";
   #pending = new Map<string, ToolCallStatus>();
   #dispatchPromise: Promise<void> = Promise.resolve();
+  #dispatchInFlight = false;
   #finishPromise: Promise<void> | undefined;
   #lastRenderedText: string | undefined;
   #visibleAtMs: number | undefined;
@@ -180,8 +190,11 @@ export class ToolProgressPublisher implements ToolProgressPort {
     this.#minVisibleMs = positiveDuration(
       options.minVisibleMs ?? DEFAULT_PROGRESS_MIN_VISIBLE_MS,
     );
+    this.#operationTimeoutMs = positiveOperationTimeout(
+      options.operationTimeoutMs ?? DEFAULT_PROGRESS_OPERATION_TIMEOUT_MS,
+    );
     this.#now = options.now ?? (() => Date.now());
-    this.#scheduler = options.scheduler ?? defaultScheduler;
+    this.#scheduler = options.scheduler ?? defaultPresentationScheduler;
   }
 
   get messageId(): number | undefined {
@@ -199,12 +212,15 @@ export class ToolProgressPublisher implements ToolProgressPort {
   async recoverPrevious(signal: AbortSignal): Promise<void> {
     if (this.#messageId !== undefined) {
       try {
-        const result = await this.#botApi.deleteMessage(
-          this.#chatId,
-          this.#messageId,
+        const outcome = await this.#callPresentation(
+          (operationSignal) => this.#botApi.deleteMessage(
+            this.#chatId,
+            this.#messageId!,
+            operationSignal,
+          ),
           signal,
         );
-        if (result.ok) {
+        if (outcome.kind === "completed" && outcome.value.ok) {
           this.#messageId = undefined;
           this.#state = "none";
           this.#lastRenderedText = undefined;
@@ -328,13 +344,18 @@ export class ToolProgressPublisher implements ToolProgressPort {
       let deleted = false;
       let terminalFailure = false;
       try {
-        const result = await this.#botApi.deleteMessage(
-          this.#chatId,
-          this.#messageId,
+        const outcome = await this.#callPresentation(
+          (operationSignal) => this.#botApi.deleteMessage(
+            this.#chatId,
+            this.#messageId!,
+            operationSignal,
+          ),
           signal,
         );
-        deleted = result.ok;
-        terminalFailure = !result.ok && result.terminal === true;
+        if (outcome.kind === "completed") {
+          deleted = outcome.value.ok;
+          terminalFailure = !outcome.value.ok && outcome.value.terminal === true;
+        }
       } catch {
         // Keep the exact durable message-id fence below. The final reply must
         // still be deliverable even if deleting presentation text fails.
@@ -369,9 +390,19 @@ export class ToolProgressPublisher implements ToolProgressPort {
     const text = renderProgressText(this.#pending, this.#maxTextLength);
     // Every Bot API operation below catches its own rejection, so this serial
     // promise never becomes a rejected/unhandled presentation failure.
-    this.#dispatchPromise = this.#dispatchPromise.then(() =>
-      this.#renderAndSend(text),
-    );
+    // Start an idle first render immediately. Besides making the first status
+    // responsive, this preserves the event-boundary snapshot semantics while
+    // the deadline wrapper races its transport promise.
+    this.#dispatchPromise = this.#dispatchInFlight
+      ? this.#dispatchPromise.then(() => this.#renderAndSend(text))
+      : this.#renderAndSend(text);
+    this.#dispatchInFlight = true;
+    const tail = this.#dispatchPromise;
+    void tail.then(() => {
+      if (this.#dispatchPromise === tail) {
+        this.#dispatchInFlight = false;
+      }
+    });
   }
 
   async #renderAndSend(text: string): Promise<void> {
@@ -390,18 +421,26 @@ export class ToolProgressPublisher implements ToolProgressPort {
         return;
       }
       let result: { ok: true; messageId: number } | { ok: false };
-      try {
-        result = await this.#botApi.sendMessage(
+      const outcome = await this.#callPresentation(
+        (operationSignal) => this.#botApi.sendMessage(
           this.#chatId,
           text,
-          this.#signal,
-        );
-      } catch {
+          operationSignal,
+        ),
+        this.#signal,
+        (lateResult) => {
+          if (lateResult.ok) {
+            void this.#compensateUnfencedMessage(lateResult.messageId);
+          }
+        },
+      );
+      if (outcome.kind !== "completed") {
         this.#sendOutcomeUnknown = true;
         this.#state = "unknown";
         this.#persist();
         return;
       }
+      result = outcome.value;
       if (result.ok) {
         this.#messageId = result.messageId;
         this.#state = "active";
@@ -428,18 +467,21 @@ export class ToolProgressPublisher implements ToolProgressPort {
       }
       this.#state = "active";
       let result: { ok: true } | { ok: false };
-      try {
-        result = await this.#botApi.editMessageText(
+      const outcome = await this.#callPresentation(
+        (operationSignal) => this.#botApi.editMessageText(
           this.#chatId,
-          this.#messageId,
+          this.#messageId!,
           text,
-          this.#signal,
-        );
-      } catch {
+          operationSignal,
+        ),
+        this.#signal,
+      );
+      if (outcome.kind !== "completed") {
         this.#state = "unknown";
         this.#persist();
         return;
       }
+      result = outcome.value;
       if (result.ok) {
         this.#lastRenderedText = text;
         // A late tool-start/completion edit must remain observable too; the
@@ -479,12 +521,17 @@ export class ToolProgressPublisher implements ToolProgressPort {
   async #compensateUnfencedMessage(messageId: number): Promise<void> {
     this.#unfencedMessageId = messageId;
     try {
-      const result = await this.#botApi.deleteMessage(
-        this.#chatId,
-        messageId,
-        AbortSignal.timeout(UNFENCED_PROGRESS_CLEANUP_TIMEOUT_MS),
+      const outcome = await this.#callPresentation(
+        (operationSignal) => this.#botApi.deleteMessage(
+          this.#chatId,
+          messageId,
+          operationSignal,
+        ),
+        new AbortController().signal,
+        undefined,
+        UNFENCED_PROGRESS_CLEANUP_TIMEOUT_MS,
       );
-      if (result.ok) {
+      if (outcome.kind === "completed" && outcome.value.ok) {
         this.#unfencedMessageId = undefined;
       }
     } catch {
@@ -501,14 +548,30 @@ export class ToolProgressPublisher implements ToolProgressPort {
     if (remainingMs <= 0) {
       return;
     }
-    await sleep(this.#scheduler, remainingMs, signal);
+    await waitForSchedulerDelay(this.#scheduler, remainingMs, signal);
+  }
+
+  /**
+   * Telegram adapters are expected to honour AbortSignal, but the boundary is
+   * deliberately raced too: a broken adapter must not hold the worker's
+   * durable final publication forever.  A late successful send is compensated
+   * because it may have reached Telegram after the deadline.
+   */
+  async #callPresentation<T>(
+    operation: (signal: AbortSignal) => Promise<T>,
+    parentSignal: AbortSignal,
+    onLateSuccess?: (value: T) => void,
+    timeoutMs = this.#operationTimeoutMs,
+  ): Promise<PresentationDeadlineOutcome<T>> {
+    return runPresentationWithinDeadline({
+      operation,
+      parentSignal,
+      onLateSuccess,
+      timeoutMs,
+      scheduler: this.#scheduler,
+    });
   }
 }
-
-const defaultScheduler: ToolProgressScheduler = {
-  setTimeout: (callback, delayMs) => setTimeout(callback, delayMs),
-  clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
-};
 
 function positiveDuration(value: number): number {
   if (!Number.isFinite(value) || value < 0) {
@@ -517,35 +580,11 @@ function positiveDuration(value: number): number {
   return Math.min(Math.floor(value), MAX_PROGRESS_MIN_VISIBLE_MS);
 }
 
-function sleep(
-  scheduler: ToolProgressScheduler,
-  delayMs: number,
-  signal: AbortSignal,
-): Promise<void> {
-  return new Promise((resolve) => {
-    let handle: unknown;
-    let settled = false;
-    const done = () => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      signal.removeEventListener("abort", onAbort);
-      resolve();
-    };
-    const onAbort = () => {
-      if (handle !== undefined) {
-        scheduler.clearTimeout(handle);
-      }
-      done();
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-    if (signal.aborted) {
-      onAbort();
-      return;
-    }
-    handle = scheduler.setTimeout(done, delayMs);
-  });
+function positiveOperationTimeout(value: number): number {
+  if (!Number.isFinite(value) || value < 1) {
+    throw new Error("Tool progress operation timeout must be at least one millisecond.");
+  }
+  return Math.min(Math.floor(value), UNFENCED_PROGRESS_CLEANUP_TIMEOUT_MS);
 }
 
 function normalizedBatchSize(value: number | undefined): number | undefined {

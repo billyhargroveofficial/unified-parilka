@@ -65,8 +65,7 @@ test("a rejected stale-progress delete cannot block final turn delivery", async 
     ),
     true,
   );
-  // The worker's normal retry policy stays intact; reclaim only after its
-  // durable backoff has elapsed, with the stale presentation fence retained.
+  // Reclaim after durable backoff, retaining the stale presentation fence.
   fixture.clock.now += 60_000;
   const worker = new BotTurnWorker({
     store: fixture.store,
@@ -97,6 +96,120 @@ test("a rejected stale-progress delete cannot block final turn delivery", async 
   assert.equal(turn?.draftText, "Финал всё равно отправлен");
   assert.equal(turn?.progressMessageId, 88);
   assert.equal(turn?.progressState, "unknown");
+});
+
+test("a never-settling progress send cannot block durable final publication", async (t) => {
+  const fixture = makeFixture(t);
+  let published = "";
+  const worker = new BotTurnWorker({
+    store: fixture.store,
+    coordinator: fixture.coordinator,
+    agent: {
+      async run({ toolProgressPort }) {
+        toolProgressPort?.onToolStarted({ toolName: "day_digest", callId: "stuck-send" });
+        await flushProgress();
+        return final("Финал после зависшего progress");
+      },
+    },
+    publisher: {
+      async publish({ publication }) {
+        published = publication.plainText;
+        return { ok: true, chunksSent: 1, telegramMessageId: 77 };
+      },
+    },
+    workerId: "stuck-progress-worker",
+    allowedChatId: CHAT.chatId,
+    mode: "live",
+    leaseMs: 5_000,
+    heartbeatMs: 100,
+    scheduler: fixture.scheduler,
+    now: () => fixture.clock.now,
+    toolProgressBotApiPort: {
+      async sendMessage() { return new Promise(() => {}); },
+      async editMessageText() { assert.fail("no edit after ambiguous send"); },
+      async deleteMessage() { assert.fail("no message id was acknowledged"); },
+    },
+  });
+
+  const run = worker.runOnce();
+  await flushProgress();
+  fixture.scheduler.fireTimeouts();
+  assert.deepEqual(await run, {
+    status: "sent",
+    turnId: fixture.turnId,
+    telegramMessageId: 77,
+  });
+  assert.equal(published, "Финал после зависшего progress");
+  assert.equal(fixture.store.getBotTurn(fixture.turnId)?.status, "sent");
+});
+
+test("a never-settling terminal progress cleanup cannot starve the next final", async (t) => {
+  const fixture = makeFixture(t);
+  const stale = fixture.store.claimNextBotTurn({
+    workerId: "stale-progress-owner",
+    chatId: CHAT.chatId,
+    leaseMs: 1_000,
+    nowMs: fixture.clock.now,
+  });
+  assert.ok(stale);
+  assert.equal(
+    fixture.store.saveBotTurnProgress(
+      stale.id,
+      "stale-progress-owner",
+      { messageId: 88, state: "unknown" },
+      fixture.clock.now,
+    ),
+    true,
+  );
+  assert.equal(
+    fixture.store.markBotTurnSkipped(
+      stale.id,
+      "stale-progress-owner",
+      "test stale progress",
+      fixture.clock.now,
+    ),
+    true,
+  );
+  const next = fixture.store.ingestBotUpdate({
+    updateId: 78,
+    rawJson: "{\"update_id\":78}",
+    chat: CHAT,
+    message: message(1_001, "@bot after stale cleanup", "owner"),
+    addressed: true,
+    maxAttempts: 3,
+    nowMs: fixture.clock.now,
+  }).turn;
+  assert.ok(next);
+
+  const worker = new BotTurnWorker({
+    store: fixture.store,
+    coordinator: fixture.coordinator,
+    agent: { async run() { return final("Финал не ждёт cleanup"); } },
+    publisher: { async publish() { return { ok: true, chunksSent: 1, telegramMessageId: 77 }; } },
+    workerId: "stale-progress-cleanup-worker",
+    allowedChatId: CHAT.chatId,
+    mode: "live",
+    leaseMs: 5_000,
+    heartbeatMs: 100,
+    scheduler: fixture.scheduler,
+    now: () => fixture.clock.now,
+    toolProgressBotApiPort: {
+      async sendMessage() { assert.fail("no new progress expected"); },
+      async editMessageText() { assert.fail("no new progress expected"); },
+      async deleteMessage() { return new Promise(() => {}); },
+    },
+  });
+
+  const run = worker.runOnce();
+  await flushProgress();
+  fixture.scheduler.fireTimeouts();
+  assert.deepEqual(await run, {
+    status: "sent",
+    turnId: next.id,
+    telegramMessageId: 77,
+  });
+  assert.equal(fixture.store.getBotTurn(stale.id)?.progressMessageId, 88);
+  assert.equal(fixture.store.getBotTurn(next.id)?.status, "sent");
 });
 
 test("terminal progress cleanup retries the exact durable fence after final delivery", async (t) => {
@@ -360,7 +473,6 @@ test("terminal progress cleanup keeps retrying while a normal FIFO backlog is dr
       },
     },
   });
-
   // A failed first cleanup does not block the first normal turn.
   assert.deepEqual(await worker.runOnce(), {
     status: "sent",
@@ -369,9 +481,7 @@ test("terminal progress cleanup keeps retrying while a normal FIFO backlog is dr
   });
   assert.deepEqual(deleteAttempts, [92]);
   assert.equal(fixture.store.getBotTurn(claimed.id)?.progressMessageId, 92);
-
-  // Even though another turn remains queued, the backoff expiry retries and
-  // clears the stale terminal progress before the second normal claim.
+  // Backoff expiry clears the stale progress before the second normal claim.
   fixture.clock.now += DEFAULT_PROGRESS_MIN_VISIBLE_MS * 5;
   assert.deepEqual(await worker.runOnce(), {
     status: "sent",
@@ -383,7 +493,5 @@ test("terminal progress cleanup keeps retrying while a normal FIFO backlog is dr
 });
 
 async function flushProgress(): Promise<void> {
-  await Promise.resolve();
-  await Promise.resolve();
-  await Promise.resolve();
+  for (let step = 0; step < 8; step += 1) await Promise.resolve();
 }

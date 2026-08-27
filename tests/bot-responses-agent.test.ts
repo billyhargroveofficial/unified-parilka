@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { ResponsesBotTurnAgent } from "../src/bot-daemon/responses-agent.js";
-import type { BotAgentRequest } from "../src/bot/agent-contract.js";
+import { isBotAgentFinalReplyWithinLimit, type BotAgentRequest } from "../src/bot/agent-contract.js";
 import type { CausalRagPacket } from "../src/bot/causal-rag/index.js";
 import type { LocalFunctionCall, RunResponsesTurnRequest, RunResponsesTurnResult } from "../src/openai-responses/index.js";
 
@@ -154,7 +154,7 @@ test("Responses bot agent reserves xhigh-effort bounded research for explicit de
   const result = await agent.run(request({
     trigger: message({
       messageId: 77,
-      text: "какую телегу взять за лям? Проведи нереальный дип дайв ресерч",
+      text: "какую телегу взять за лям? Проведи глубокий веб-ресерч",
     }),
   }));
 
@@ -370,6 +370,48 @@ test("Responses bot agent never routes an unvalidated function to the read host"
   });
   await agent.run(request());
   assert.equal(readCalls, 0);
+  await agent.close();
+});
+
+test("Responses bot agent publishes an oversized subscription output_text with a bounded marker", async () => {
+  const agent = new ResponsesBotTurnAgent({
+    responses: { async run() { return { ...finalResult(), text: `Полезное начало\n\n${"длинный ответ ".repeat(20_000)}` }; } },
+    causalRag: { async build() { return packet(); } },
+    media: { async resolveImages() { return []; } },
+    readTools: { async callTool() { throw new Error("not called"); } },
+  });
+
+  const result = await agent.run(request());
+
+  assert.equal(isBotAgentFinalReplyWithinLimit(result.text), true);
+  assert.match(result.text, /^Полезное начало/u);
+  assert.match(result.text, /Ответ сокращён: достигнут лимит публикации\./u);
+  assert.match(result.text, /\*GPT-5\.6 Luna Fast xhigh/u);
+  await agent.close();
+});
+
+test("Responses bot agent reserves the durable budget for long allowed citation URLs", async () => {
+  const citations = Array.from({ length: 12 }, (_value, index) => ({
+    startIndex: 0,
+    endIndex: 1,
+    title: `Источник ${String(index + 1)}`,
+    url: `https://example.test/${String(index)}/${"a".repeat(3_900)}`,
+  }));
+  const agent = new ResponsesBotTurnAgent({
+    responses: { async run() { return { ...finalResult(), text: "Начало ответа\n\n" + "x".repeat(100_000), annotations: citations }; } },
+    causalRag: { async build() { return packet(); } },
+    media: { async resolveImages() { return []; } },
+    readTools: { async callTool() { throw new Error("not called"); } },
+  });
+
+  const result = await agent.run(request());
+
+  assert.equal(isBotAgentFinalReplyWithinLimit(result.text), true);
+  assert.match(result.text, /Ответ сокращён: достигнут лимит публикации\./u);
+  assert.match(result.text, /\[Источник 1\]\(https:\/\/example\.test\/0\//u);
+  assert.match(result.text, /\[Источник 4\]\(https:\/\/example\.test\/3\//u);
+  assert.doesNotMatch(result.text, /\[Источник 5\]/u);
+  assert.match(result.text, /\*GPT-5\.6 Luna Fast xhigh/u);
   await agent.close();
 });
 

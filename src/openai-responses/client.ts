@@ -5,11 +5,7 @@ import type {
   ResponseStreamEvent,
 } from "openai/resources/responses/responses";
 import {
-  OPENAI_RESPONSES_MODEL,
-  OPENAI_RESPONSES_SUBSCRIPTION_SERVICE_TIER,
-  type EffectiveResponsesServiceTier,
   type LocalFunctionCall,
-  type ResponsesProgressEvent,
   type ResponsesCitation,
   type ResponsesStreamTransport,
   type ResponsesUsage,
@@ -25,6 +21,8 @@ import {
   addResponsesUsage,
   hasInsufficientBoundedResearchCoverage,
   researchEvidencePhaseTimeoutMs,
+  researchLegTimeoutMs,
+  researchNoProgressTimeoutMs,
   researchStalledActionGraceMs,
   researchContinuationInput,
   researchSynthesisInput,
@@ -53,6 +51,14 @@ import {
   createRequest,
   userInput,
 } from "./request.js";
+import {
+  assertCompletedResponseAdmission,
+  awaitWithAbort,
+  joinSignals,
+  nextWithAbort,
+  progress,
+  type CompletedResponseAdmission,
+} from "./stream-control.js";
 
 const DEFAULT_TIMEOUT_MS = 180_000;
 const DEFAULT_MAX_FUNCTION_CALLS = 8;
@@ -88,6 +94,9 @@ export class OpenAiResponsesTurnClient {
     const stalledResearchActionGraceMs = evidenceTimeoutMs === undefined
       ? undefined
       : researchStalledActionGraceMs(evidenceTimeoutMs);
+    const boundedResearchLegTimeoutMs = evidenceTimeoutMs === undefined
+      ? undefined
+      : researchLegTimeoutMs(timeoutMs);
     const evidenceTimeout = new AbortController();
     let evidenceTimer = evidenceTimeoutMs === undefined
       ? undefined
@@ -99,6 +108,7 @@ export class OpenAiResponsesTurnClient {
     let firstLeg = true;
     let functionCalls = 0;
     const hostedWebCallIds = new Set<string>();
+    const openPageAttemptCallIds = new Set<string>();
     const successfulHostedWebEvidenceKeys = new Set<string>();
     const evidenceCitations = new Map<string, ResponsesCitation>();
     const rememberEvidenceCitations = (...groups: readonly (readonly ResponsesCitation[])[]): void => {
@@ -121,6 +131,7 @@ export class OpenAiResponsesTurnClient {
           request: activeRequest,
           firstLeg,
           successfulHostedWebCalls: successfulHostedWebEvidenceKeys.size,
+          hasOpenPageAttempt: openPageAttemptCallIds.size > 0,
           requiredResearchLegs,
         });
         if (requireHostedWeb && activeRequest.hostedWebSearchPolicy === "bounded_research") {
@@ -133,12 +144,18 @@ export class OpenAiResponsesTurnClient {
           signal,
           evidenceSignal: collectingResearchEvidence ? evidenceTimeout.signal : undefined,
           stalledResearchActionGraceMs,
+          researchLegTimeoutMs: boundedResearchLegTimeoutMs,
+          researchNoProgressTimeoutMs: boundedResearchLegTimeoutMs === undefined
+            ? undefined
+            : researchNoProgressTimeoutMs(boundedResearchLegTimeoutMs),
           hostedWebAttemptsBeforeLeg: hostedWebCallIds.size,
+          openPageAttemptsBeforeLeg: new Set(openPageAttemptCallIds),
           successfulEvidenceBeforeLeg: new Set(successfulHostedWebEvidenceKeys),
           maxFunctionCalls,
           captureResearchEvidence: collectingResearchEvidence,
         });
         for (const callId of leg.hostedWebCallIds) hostedWebCallIds.add(callId);
+        for (const callId of leg.openPageAttemptCallIds) openPageAttemptCallIds.add(callId);
         for (const key of leg.successfulHostedWebEvidenceKeys) successfulHostedWebEvidenceKeys.add(key);
         if (leg.kind === "research_evidence") {
           rememberEvidenceCitations(citationsFromWebEvidence(leg.output));
@@ -174,6 +191,7 @@ export class OpenAiResponsesTurnClient {
             activeRequest,
             successfulHostedWebEvidenceKeys.size,
             hostedWebCallIds.size,
+            openPageAttemptCallIds.size > 0,
           )) {
             if (evidenceTimer !== undefined) clearTimeout(evidenceTimer);
             evidenceTimer = undefined;
@@ -187,16 +205,26 @@ export class OpenAiResponsesTurnClient {
             firstLeg = false;
             continue;
           }
-          if (shouldContinueBoundedResearch(activeRequest, successfulHostedWebEvidenceKeys.size, requiredResearchLegs)) {
+          if (shouldContinueBoundedResearch(
+            activeRequest,
+            successfulHostedWebEvidenceKeys.size,
+            openPageAttemptCallIds.size > 0,
+            requiredResearchLegs,
+          )) {
             input = [
               ...input,
               ...responseOutputInput(leg.response.output),
-              researchContinuationInput(successfulHostedWebEvidenceKeys.size),
+              researchContinuationInput(successfulHostedWebEvidenceKeys.size, openPageAttemptCallIds.size > 0),
             ];
             firstLeg = false;
             continue;
           }
-          if (hasInsufficientBoundedResearchCoverage(activeRequest, successfulHostedWebEvidenceKeys.size, requiredResearchLegs)) {
+          if (hasInsufficientBoundedResearchCoverage(
+            activeRequest,
+            successfulHostedWebEvidenceKeys.size,
+            openPageAttemptCallIds.size > 0,
+            requiredResearchLegs,
+          )) {
             throw new ResponsesTurnError("Responses bounded research exhausted before sufficient hosted-web coverage.");
           }
           if (text.length === 0) throw new ResponsesTurnError("Responses completed without final text.");
@@ -256,21 +284,26 @@ export class OpenAiResponsesTurnClient {
     signal: AbortSignal;
     evidenceSignal?: AbortSignal;
     stalledResearchActionGraceMs?: number;
+    researchLegTimeoutMs?: number;
+    researchNoProgressTimeoutMs?: number;
     hostedWebAttemptsBeforeLeg: number;
+    openPageAttemptsBeforeLeg: ReadonlySet<string>;
     successfulEvidenceBeforeLeg: ReadonlySet<string>;
     maxFunctionCalls: number;
     captureResearchEvidence: boolean;
   }): Promise<{
     kind: "completed";
     response: Response;
-    model: typeof OPENAI_RESPONSES_MODEL;
-    serviceTier: EffectiveResponsesServiceTier;
+    model: CompletedResponseAdmission["model"];
+    serviceTier: CompletedResponseAdmission["serviceTier"];
     hostedWebCallIds: readonly string[];
+    openPageAttemptCallIds: readonly string[];
     successfulHostedWebEvidenceKeys: readonly string[];
   } | {
     kind: "research_evidence";
     output: readonly ResponseOutputItem[];
     hostedWebCallIds: readonly string[];
+    openPageAttemptCallIds: readonly string[];
     successfulHostedWebEvidenceKeys: readonly string[];
   }> {
     const legAbort = new AbortController();
@@ -280,31 +313,65 @@ export class OpenAiResponsesTurnClient {
       ...(options.evidenceSignal === undefined ? [] : [options.evidenceSignal]),
     ]);
     const thinkingCallId = `thinking:${crypto.randomUUID()}`;
-    // This is deliberately before the awaited HTTP create: Telegram gets an
-    // immediate status even while the upstream connection is being established.
-    await progress(options.request, { type: "thinking_started", callId: thinkingCallId });
     let thinking = true;
     const activeWebSearches = new Set<string>();
     const startedWebSearches = new Set<string>();
     const completedWebSearches = new Set<string>();
     const strictSuccessfulWebEvidenceKeys = new Set<string>();
     const totalSuccessfulWebEvidenceKeys = new Set(options.successfulEvidenceBeforeLeg);
+    const openPageAttemptCallIds = new Set(options.openPageAttemptsBeforeLeg);
     const capturedOutput: ResponseOutputItem[] = [];
+    const capturedOutputIds = new Set<string>();
     const announcedWebDetails = new Map<string, string>();
     let stalledResearchActionDeadlineReached = false;
+    let researchLegDeadlineReached = false;
+    let researchNoProgressDeadlineReached = false;
+    let researchLegTimer: ReturnType<typeof setTimeout> | undefined;
+    let researchNoProgressTimer: ReturnType<typeof setTimeout> | undefined;
     let guardedResearchCallId: string | undefined;
     let stalledResearchActionTimer: ReturnType<typeof setTimeout> | undefined;
     const researchEvidence = (): {
       kind: "research_evidence";
       output: readonly ResponseOutputItem[];
       hostedWebCallIds: readonly string[];
+      openPageAttemptCallIds: readonly string[];
       successfulHostedWebEvidenceKeys: readonly string[];
     } => ({
       kind: "research_evidence",
       output: capturedOutput,
       hostedWebCallIds: [...startedWebSearches],
+      openPageAttemptCallIds: [...openPageAttemptCallIds],
       successfulHostedWebEvidenceKeys: [...strictSuccessfulWebEvidenceKeys],
     });
+    const armResearchNoProgressDeadline = (): void => {
+      if (options.researchNoProgressTimeoutMs === undefined) return;
+      if (researchNoProgressTimer !== undefined) clearTimeout(researchNoProgressTimer);
+      researchNoProgressTimer = setTimeout(() => {
+        researchNoProgressDeadlineReached = true;
+        legAbort.abort();
+      }, options.researchNoProgressTimeoutMs);
+      researchNoProgressTimer.unref();
+    };
+    const armResearchLegDeadline = (): void => {
+      if (options.researchLegTimeoutMs === undefined) return;
+      researchLegTimer = setTimeout(() => {
+        researchLegDeadlineReached = true;
+        legAbort.abort();
+      }, options.researchLegTimeoutMs);
+      researchLegTimer.unref();
+      armResearchNoProgressDeadline();
+    };
+    const recordOpenPageAttempt = (callId: string, action: ResponsesWebAction | undefined): void => {
+      if (action === "open_page") openPageAttemptCallIds.add(callId);
+    };
+    const captureResearchOutput = (item: ResponseOutputItem): void => {
+      const id = (item as { id?: unknown }).id;
+      if (typeof id === "string") {
+        if (capturedOutputIds.has(id)) return;
+        capturedOutputIds.add(id);
+      }
+      capturedOutput.push(item);
+    };
     const clearGuardedResearchAction = (callId: string): void => {
       if (guardedResearchCallId !== callId || stalledResearchActionTimer === undefined) return;
       clearTimeout(stalledResearchActionTimer);
@@ -329,7 +396,7 @@ export class OpenAiResponsesTurnClient {
     const completeThinking = async (ok: boolean): Promise<void> => {
       if (!thinking) return;
       thinking = false;
-      await progress(options.request, { type: "thinking_completed", callId: thinkingCallId, ok });
+      await progress(options.request, { type: "thinking_completed", callId: thinkingCallId, ok }, legSignal);
     };
     const startWebSearch = async (
       callId: string,
@@ -339,6 +406,7 @@ export class OpenAiResponsesTurnClient {
       completedOk = true,
     ): Promise<void> => {
       const announced = webProgressFingerprint(action ?? "search", input, batchSize);
+      recordOpenPageAttempt(callId, action);
       if (completedWebSearches.has(callId)) {
         // On the subscription wire the granular `completed` event arrives
         // before `output_item.done`, which is the first event carrying action
@@ -350,10 +418,10 @@ export class OpenAiResponsesTurnClient {
             type: "hosted_web_action", callId, action,
             ...(input === undefined ? {} : { input }),
             ...(batchSize === undefined ? {} : { batchSize }),
-          });
+          }, legSignal);
           await progress(options.request, {
             type: "hosted_web_completed", callId, ok: completedOk,
-          });
+          }, legSignal);
         }
         return;
       }
@@ -366,7 +434,7 @@ export class OpenAiResponsesTurnClient {
           ...(action === undefined ? {} : { action }),
           ...(input === undefined ? {} : { input }),
           ...(batchSize === undefined ? {} : { batchSize }),
-        });
+        }, legSignal);
         // Missing early metadata is presented as search by the Telegram
         // projection, so remember that same fallback for late-action dedupe.
         announcedWebDetails.set(callId, announced);
@@ -378,7 +446,7 @@ export class OpenAiResponsesTurnClient {
             type: "hosted_web_action", callId, action,
             ...(input === undefined ? {} : { input }),
             ...(batchSize === undefined ? {} : { batchSize }),
-          });
+          }, legSignal);
         }
       }
       maybeArmStalledResearchAction();
@@ -388,11 +456,16 @@ export class OpenAiResponsesTurnClient {
       await startWebSearch(callId);
       activeWebSearches.delete(callId);
       completedWebSearches.add(callId);
-      await progress(options.request, { type: "hosted_web_completed", callId, ok });
+      await progress(options.request, { type: "hosted_web_completed", callId, ok }, legSignal);
     };
     let iterator: AsyncIterator<ResponseStreamEvent> | undefined;
+    armResearchLegDeadline();
+    // This is deliberately before the awaited HTTP create: Telegram gets an
+    // immediate status even while the upstream connection is being established.
+    await progress(options.request, { type: "thinking_started", callId: thinkingCallId }, legSignal);
     try {
-      const stream = await this.#transport.create(
+      if (legSignal.aborted) throw new ResponsesTurnCancelledError();
+      const stream = await awaitWithAbort(this.#transport.create(
         createRequest(
           options.request,
           options.input,
@@ -400,16 +473,14 @@ export class OpenAiResponsesTurnClient {
           options.maxFunctionCalls,
         ),
         { signal: legSignal },
-      );
+      ), legSignal);
       let completed: Response | undefined;
-      let completedAdmission: {
-        model: typeof OPENAI_RESPONSES_MODEL;
-        serviceTier: EffectiveResponsesServiceTier;
-      } | undefined;
+      let completedAdmission: CompletedResponseAdmission | undefined;
       iterator = stream[Symbol.asyncIterator]();
       for (;;) {
         const next = await nextWithAbort(iterator, legSignal);
         if (next.done) break;
+        armResearchNoProgressDeadline();
         const event = next.value;
         if (event.type === "response.web_search_call.in_progress" || event.type === "response.web_search_call.searching") {
           await completeThinking(true);
@@ -420,7 +491,7 @@ export class OpenAiResponsesTurnClient {
           const web = webSearchItem(event.item);
           if (event.type === "response.output_item.done" && options.captureResearchEvidence &&
             web === undefined && event.item.type === "reasoning") {
-            capturedOutput.push(event.item);
+            captureResearchOutput(event.item);
           }
           if (web !== undefined) {
             await completeThinking(true);
@@ -431,10 +502,11 @@ export class OpenAiResponsesTurnClient {
                 const evidenceKey = webProgressFingerprint(web.action ?? "search", web.input);
                 strictSuccessfulWebEvidenceKeys.add(evidenceKey);
                 totalSuccessfulWebEvidenceKeys.add(evidenceKey);
-                if (options.captureResearchEvidence) capturedOutput.push(event.item);
+                if (options.captureResearchEvidence) captureResearchOutput(event.item);
                 clearGuardedResearchAction(web.callId);
                 if (options.captureResearchEvidence &&
                   totalSuccessfulWebEvidenceKeys.size >= TARGET_SUCCESSFUL_HOSTED_WEB_CALLS) {
+                  if (openPageAttemptCallIds.size === 0) continue;
                   legAbort.abort();
                   for (const activeCallId of [...activeWebSearches]) {
                     await completeWebSearch(activeCallId, false);
@@ -446,8 +518,9 @@ export class OpenAiResponsesTurnClient {
               if (options.captureResearchEvidence &&
                 options.hostedWebAttemptsBeforeLeg + startedWebSearches.size >=
                   TARGET_SUCCESSFUL_HOSTED_WEB_CALLS &&
-                totalSuccessfulWebEvidenceKeys.size >= MIN_SYNTHESIS_HOSTED_WEB_CALLS) {
-                legAbort.abort();
+                  totalSuccessfulWebEvidenceKeys.size >= MIN_SYNTHESIS_HOSTED_WEB_CALLS) {
+                  if (openPageAttemptCallIds.size === 0) continue;
+                  legAbort.abort();
                 for (const activeCallId of [...activeWebSearches]) {
                   await completeWebSearch(activeCallId, false);
                 }
@@ -493,6 +566,7 @@ export class OpenAiResponsesTurnClient {
         response: completed,
         ...completedAdmission,
         hostedWebCallIds: [...startedWebSearches],
+        openPageAttemptCallIds: [...openPageAttemptCallIds],
         successfulHostedWebEvidenceKeys: [...strictSuccessfulWebEvidenceKeys],
       };
     } catch (error) {
@@ -500,14 +574,24 @@ export class OpenAiResponsesTurnClient {
       for (const callId of [...activeWebSearches]) {
         await completeWebSearch(callId, false);
       }
+      if (options.signal.aborted) throw error;
+      if (researchLegDeadlineReached || researchNoProgressDeadlineReached) {
+        if (options.captureResearchEvidence && totalSuccessfulWebEvidenceKeys.size >= MIN_SYNTHESIS_HOSTED_WEB_CALLS &&
+          openPageAttemptCallIds.size > 0) {
+          return researchEvidence();
+        }
+        throw new ResponsesTurnError(`Responses bounded research ${options.captureResearchEvidence ? "evidence" : "synthesis"} leg stalled before completion.`);
+      }
       if (!options.signal.aborted &&
         (stalledResearchActionDeadlineReached || options.evidenceSignal?.aborted === true) &&
-        totalSuccessfulWebEvidenceKeys.size >= MIN_SYNTHESIS_HOSTED_WEB_CALLS) {
+        totalSuccessfulWebEvidenceKeys.size >= MIN_SYNTHESIS_HOSTED_WEB_CALLS && openPageAttemptCallIds.size > 0) {
         return researchEvidence();
       }
       throw error;
     } finally {
       if (stalledResearchActionTimer !== undefined) clearTimeout(stalledResearchActionTimer);
+      if (researchLegTimer !== undefined) clearTimeout(researchLegTimer);
+      if (researchNoProgressTimer !== undefined) clearTimeout(researchNoProgressTimer);
       try {
         const closing = iterator?.return?.();
         if (closing !== undefined) void Promise.resolve(closing).catch(() => {});
@@ -588,51 +672,4 @@ function parseFunctionCall(call: ResponseFunctionToolCall): LocalFunctionCall {
   } catch {
     return { callId: call.call_id, name: call.name, arguments: undefined };
   }
-}
-
-/**
- * The public Luna page currently lists only the `gpt-5.6-luna` alias, not a
- * dated snapshot. Accept that exact response identity only: prefix matching
- * would silently admit Terra, Sol, or an unreviewed future snapshot.
- *
- * The subscription transport normalizes its Fast lane to the exact `priority`
- * wire value. Reject every other value on every function-loop leg, not merely
- * during daemon preflight.
- */
-function assertCompletedResponseAdmission(response: Response): {
-  model: typeof OPENAI_RESPONSES_MODEL;
-  serviceTier: EffectiveResponsesServiceTier;
-} {
-  if (response.model !== OPENAI_RESPONSES_MODEL) {
-    throw new ResponsesTurnError("Responses completed with an unexpected model.");
-  }
-  if (response.status !== "completed") {
-    throw new ResponsesTurnError("Responses completed event carried a non-completed response.");
-  }
-  if (response.service_tier !== OPENAI_RESPONSES_SUBSCRIPTION_SERVICE_TIER) {
-    throw new ResponsesTurnError("Responses completed without the required fast service tier.");
-  }
-  return { model: OPENAI_RESPONSES_MODEL, serviceTier: OPENAI_RESPONSES_SUBSCRIPTION_SERVICE_TIER };
-}
-
-async function nextWithAbort<T>(iterator: AsyncIterator<T>, signal: AbortSignal): Promise<IteratorResult<T>> {
-  if (signal.aborted) throw new ResponsesTurnCancelledError();
-  let listener: (() => void) | undefined;
-  const aborted = new Promise<never>((_resolve, reject) => {
-    listener = () => reject(new ResponsesTurnCancelledError());
-    signal.addEventListener("abort", listener, { once: true });
-  });
-  try {
-    return await Promise.race([iterator.next(), aborted]);
-  } finally {
-    if (listener !== undefined) signal.removeEventListener("abort", listener);
-  }
-}
-
-function joinSignals(parent: AbortSignal | undefined, timeout: AbortSignal): AbortSignal {
-  return parent === undefined ? timeout : AbortSignal.any([parent, timeout]);
-}
-
-async function progress(request: RunResponsesTurnRequest, event: ResponsesProgressEvent): Promise<void> {
-  try { await request.progress?.onProgress(event); } catch { /* presentation never controls a model turn */ }
 }

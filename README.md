@@ -41,21 +41,28 @@ provider's native `action.queries` batch inside one `web_search_call`. Only the
 bounded value (query, URL host/path or find pattern) is shown, with no redundant
 argument-key prefix;
 URL credentials/query/hash, arbitrary arguments and tool output remain hidden.
-Citations in the final response are converted to a compact clickable footer;
+Citations in the final response are converted to a compact clickable footer
+of at most four distinct pages; known tracking-query variants collapse without
+merging semantic query records, and repeated domain titles gain a path label;
 if a subscription synthesis leg omits annotations, validated HTTPS sources from
 its completed web evidence are used as the fallback, and opaque internal citation
 placeholders are removed from visible text.
-An explicit `deep dive`/`deep research`/`дип-дайв`/`глубокий ресерч` request
+An explicit `deep dive`/`deep research`/`deep web research`/`дип-дайв`/
+`глубокий ресерч`/`глубокий веб-ресерч` request
 enters a bounded host-controlled research loop: early drafts are retained only
 inside the same stateless turn, hosted web is required again toward a target of
 four successful unique web actions (at most four required legs). As soon as four
 streamed actions complete, the host cancels further native web work and gives
 their provider output to one direct, tool-free Luna/xhigh synthesis leg; only that
-final answer is published. Once three strict completed evidence actions exist, a
-fourth action gets a 20-second grace period: if it stalls, fails or only repeats
-existing evidence, the host runs the same tool-free synthesis with an explicit
-uncertainty instruction. Fewer than three completed evidence actions cannot be
-published, and a hard model timeout is terminal instead of replaying progress.
+final answer is published. A research final also requires an observed hosted
+`open_page` attempt: four search-only selectors force another bounded hosted
+leg instead of being accepted as fetch evidence. Every research leg, including
+the initial HTTP create and tool-free synthesis, is capped at 45 seconds or one
+third of the turn and has a no-progress watchdog capped at 20 seconds. Once
+three strict completed evidence actions plus the fetch attempt exist, a stalled
+or failed remaining action can fall back to synthesis with an explicit
+uncertainty instruction. Below that floor the host refuses publication, and a
+caller/global timeout is terminal instead of replaying progress.
 Generic requests for detail remain single-pass.
 The live subscription stream exposes each action early enough for that cutoff;
 a terminal-only adapter can only account for extra actions already completed
@@ -87,6 +94,11 @@ are folded into the next tool-start snapshot, repeated continuation-thinking is
 suppressed, and the per-turn snapshot count is hard-bounded so presentation can
 never consume Telegram's allowance needed by the final reply. The bubble is
 deleted before the final rich message and never becomes chat corpus/digest input.
+Each transient send/edit/delete/recovery has a five-second host deadline, so a
+broken Bot API operation cannot delay durable final publication; exact known
+message IDs remain fenced for later cleanup. Oversized provider output is
+clipped on a Unicode boundary with a visible marker while preserving bounded
+citations and the status footer, rather than failing the turn.
 
 Dream's internal review reads/writes are not rendered as fake live tool calls:
 they are staged and may be rolled back. Once a nightly Dream day commits, it

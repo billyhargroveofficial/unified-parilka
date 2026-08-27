@@ -31,7 +31,11 @@ transport.
 The subscription endpoint rejects Platform-only `max_output_tokens` and
 `max_tool_calls` request fields. The direct transport omits both from the wire;
 the TypeScript host still enforces bounded streamed output, final publication,
-same-turn local function count and aggregate function-output budgets.
+same-turn local function count and aggregate function-output budgets. If a
+provider completion still exceeds the durable Telegram envelope, the host
+clips only the model-visible prefix on a Unicode boundary, appends an explicit
+truncation marker, and preserves the bounded citation/status suffix instead of
+failing and retrying the durable turn.
 
 Every bot request contains hosted `web_search`; hosted search/open-page/
 find-in-page occurs in that same server-side Responses request. An explicit
@@ -44,11 +48,16 @@ four unique successful calls, with at most four required research legs under
 the same turn timeout. Four streamed completed actions trigger an immediate
 handoff to a direct tool-free Luna/xhigh synthesis leg, reserving part of the
 logical timeout for a final answer instead of allowing an unnecessary fifth
-web action to stall the turn. If three strict completed evidence actions are
-already available, a slow, failed or redundant fourth attempt is cut off after
-a bounded 20-second grace and the finalizer must expose material uncertainty; below three
-completed actions the host refuses publication. Hard model/tool timeouts are
-terminal and do not replay a second visible attempt.
+web action to stall the turn. Search-only evidence is insufficient: at least
+one action-bearing hosted `open_page` attempt must be observed before any
+research final can be admitted. Each research leg, including HTTP `create`,
+progress callbacks and the tool-free synthesis leg, has a hard 45-second-or-
+one-third-of-turn ceiling plus a no-progress watchdog capped at 20 seconds. If
+three strict completed evidence actions and an `open_page` attempt are already
+available, a slow, failed or redundant fourth attempt may hand those bounded
+results to the finalizer with an uncertainty instruction; below that floor the
+host refuses publication. Caller/global cancellation wins over this fallback,
+and no timeout replays a second visible attempt.
 Production subscription SSE exposes granular action items, so the host can cut
 at that boundary. A terminal-only adapter can only report already-completed
 extras and must keep their Telegram tool count truthful.
@@ -57,7 +66,9 @@ because the provider's `max_tool_calls` field is only a ceiling and the direct
 subscription transport does not send Platform-only caps. Generic detailed
 questions remain single-pass.
 The host accumulates safe lifecycles in one temporary Telegram progress
-message and turns valid web citations into final clickable links. Hosted rows
+message and turns valid web citations into at most four final clickable page
+links. Known tracking-query variants collapse, semantic query records remain
+distinct, and repeated domain-only titles gain a bounded path label. Hosted rows
 show an explicit `×N`, summing both simultaneous items of the same action and
 the native `action.queries` batch cardinality inside one provider item. If
 subscription synthesis omits final annotations, completed
@@ -118,6 +129,16 @@ coalesces successful state transitions under a hard snapshot budget, deletes it
 before native rich final publication, and preserves the normal draft/send-fence/
 `lost_ack` delivery contract. This budget reserves Bot API capacity for the
 actual final answer even when a provider emits a pathological progress stream.
+Every progress send/edit/delete/recovery operation is additionally raced
+against a five-second host deadline. An ambiguous send freezes further
+progress and a known late ACK is compensated best-effort; known message IDs
+retain their durable cleanup fence. Neither transient progress nor stale
+terminal cleanup can hold final publication or starve the FIFO worker.
+
+The direct transport keeps one stable `session-id` per transport but creates a
+fresh `x-client-request-id` for every logical Responses operation. Its single
+401 refresh/replay reuses that operation's request ID; unrelated operations
+never share it.
 
 ## Credential and configuration
 
@@ -173,6 +194,9 @@ npm run check:shell
 npm run check:systemd
 node --test --import tsx tests/responses-*.test.ts tests/bot-responses-*.test.ts tests/bot-causal-rag-*.test.ts
 npm test
+# Optional live diagnostics only: every direct arm constructs a fresh logical
+# transport/client, matching the native arm's fresh codex process/cwd boundary.
+# PARILKA_LIVE_BENCHMARK=1 npm run benchmark:responses-vs-codex -- ...
 # Builds a fresh immutable version and atomically moves responses-current;
 # it never mutates dist/ or an already activated Responses release. Activate
 # only after every preceding offline test is green.

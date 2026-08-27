@@ -10,7 +10,9 @@ import type { BenchmarkArmReport, BenchmarkScenario, BenchmarkWebAction, LiveBen
 import { acceptedOutcome } from "./acceptance.js";
 import { TimingRecorder } from "./timing.js";
 
-type DirectTurnClient = Pick<OpenAiResponsesTurnClient, "run">;
+export type DirectTurnClient = Pick<OpenAiResponsesTurnClient, "run">;
+/** Creates the isolated direct client/transport used by one benchmark arm. */
+export type DirectTurnClientFactory = (authFile: string) => DirectTurnClient;
 
 const DIRECT_INSTRUCTIONS = [
   "You are a benchmark arm. Answer the user directly and concisely in Russian.",
@@ -21,12 +23,15 @@ const DIRECT_INSTRUCTIONS = [
 export async function runDirectResponsesArm(
   options: Pick<LiveBenchmarkOptions, "authFile" | "effort">,
   scenario: BenchmarkScenario,
-  client: DirectTurnClient = createDirectResponsesClient(options.authFile),
+  createClient: DirectTurnClientFactory = createDirectResponsesClient,
 ): Promise<BenchmarkArmReport> {
   const timing = new TimingRecorder();
   const lifecycle = new DirectWebLifecycle();
   timing.event("started");
   try {
+    // A native arm starts a new Codex process. Mirror that logical execution
+    // boundary here instead of retaining auth/transport/client state between arms.
+    const client = createClient(options.authFile);
     const result = await client.run(directRequest(options.effort, scenario, timing, (event) => lifecycle.observe(event)));
     const usage = result.aggregateUsage ?? result.usage;
     const usageScope = result.aggregateUsage === undefined ? "final_leg" : "aggregate";
@@ -86,7 +91,7 @@ export function directRequest(
   };
 }
 
-/** One benchmark creates this once and shares it across direct arm runs. */
+/** Create the direct transport/client for exactly one benchmark arm. */
 export function createDirectResponsesClient(authFile: string): OpenAiResponsesTurnClient {
   return new OpenAiResponsesTurnClient(new CodexSubscriptionResponsesTransport({
     auth: new CodexSubscriptionAuthStore({ authFile }),

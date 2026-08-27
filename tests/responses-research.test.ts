@@ -75,7 +75,11 @@ test("Responses core bounds one-call research at four required legs", async () =
     `resp-${String(index)}`,
     `draft-${String(index)}`,
     [
-      hostedWebOutput(`web-${String(index)}`, "search", { queries: [`query-${String(index)}`] }),
+      hostedWebOutput(
+        `web-${String(index)}`,
+        index === 4 ? "open_page" : "search",
+        index === 4 ? { url: "https://market.example/cars" } : { queries: [`query-${String(index)}`] },
+      ),
       assistantOutput(`msg-${String(index)}`, `draft-${String(index)}`),
     ],
   )))));
@@ -146,8 +150,8 @@ test("Responses core refuses a research answer below the three-action synthesis 
 test("Responses core accounts for terminal-only actions already completed above the target", async () => {
   const output = [1, 2, 3, 4, 5].map((index) => hostedWebOutput(
     `web-${String(index)}`,
-    "search",
-    { queries: [`distinct-${String(index)}`] },
+    index === 5 ? "open_page" : "search",
+    index === 5 ? { url: "https://market.example/cars" } : { queries: [`distinct-${String(index)}`] },
   ));
   output.push(assistantOutput("msg-final", "verified final"));
   const transport = new FakeResponses(events(completed(response("resp-final", "verified final", output))));
@@ -240,72 +244,6 @@ test("Responses core cuts off native research after four streamed actions and ru
   assert.equal(result.aggregateUsage, undefined, "an intentionally aborted evidence stream has no terminal usage");
 });
 
-test("Responses core cuts off a stalled fourth hosted action and does not await stream return", async () => {
-  const captured = [
-    hostedWebOutput("web-1", "search", { queries: ["рынок авто РФ"] }),
-    hostedWebOutput("web-2", "search", { queries: ["цены август 2026"] }),
-    hostedWebOutput("web-3", "open_page", { url: "https://market.example/cars" }),
-  ];
-  const finalOutput = [assistantOutput("msg-final", "Итог по трём готовым источникам")];
-  const transport = new FakeResponses(
-    stalledFourthEvidence(captured),
-    events(completed(response("resp-final", "Итог по трём готовым источникам", finalOutput))),
-  );
-  const progressEvents: Array<Record<string, unknown>> = [];
-  const startedAt = Date.now();
-
-  const result = await new OpenAiResponsesTurnClient(transport).run({
-    ...researchRequest(),
-    timeoutMs: 5_000,
-    progress: { async onProgress(event) { progressEvents.push(event); } },
-  });
-
-  assert.ok(Date.now() - startedAt < 2_000, "stalled stream return must not consume the global timeout");
-  assert.equal(transport.requests.length, 2);
-  assert.deepEqual(transport.requests[1]?.tools, []);
-  assert.deepEqual(transport.requests[1]?.input.slice(1, 4), captured);
-  const synthesis = transport.requests[1]?.input.at(-1) as {
-    role?: unknown; content?: Array<{ text?: unknown }>;
-  } | undefined;
-  assert.match(String(synthesis?.content?.[0]?.text), /3 successful actions across 4 attempts/u);
-  assert.match(String(synthesis?.content?.[0]?.text), /slow, failed, or redundant hosted action/u);
-  assert.equal(result.text, "Итог по трём готовым источникам");
-  assert.equal(result.hostedWebCalls, 4);
-  assert.equal(progressEvents.some((event) => event.type === "hosted_web_completed" &&
-    event.callId === "web-4" && event.ok === false), true);
-});
-
-test("Responses core applies the stalled-action grace across research legs", async () => {
-  const priorOutput = [
-    hostedWebOutput("web-1", "search"),
-    hostedWebOutput("web-2", "open_page"),
-    hostedWebOutput("web-3", "find_in_page"),
-    assistantOutput("msg-draft", "Черновик по трём источникам"),
-  ];
-  const transport = new FakeResponses(
-    events(completed(response("resp-prior", "Черновик по трём источникам", priorOutput))),
-    stalledWebAction("web-4"),
-    events(completed(response("resp-final", "Финал после bounded cutoff"))),
-  );
-  const startedAt = Date.now();
-
-  const result = await new OpenAiResponsesTurnClient(transport).run({
-    ...researchRequest(),
-    timeoutMs: 5_000,
-  });
-
-  assert.ok(Date.now() - startedAt < 2_000);
-  assert.equal(transport.requests.length, 3);
-  assert.deepEqual(transport.requests[2]?.tools, []);
-  assert.deepEqual(transport.requests[2]?.input.slice(1, 1 + priorOutput.length), priorOutput);
-  const synthesis = transport.requests[2]?.input.at(-1) as {
-    content?: Array<{ text?: unknown }>;
-  } | undefined;
-  assert.match(String(synthesis?.content?.[0]?.text), /3 successful actions across 4 attempts/u);
-  assert.equal(result.text, "Финал после bounded cutoff");
-  assert.equal(result.hostedWebCalls, 4);
-});
-
 test("Responses core finalizes terminal three-of-four coverage without another web attempt", async () => {
   const evidenceOutput = [
     hostedWebOutput("web-1", "search"),
@@ -369,72 +307,6 @@ async function* streamedEvidence(items: readonly Record<string, unknown>[]): Asy
     } as unknown as ResponseStreamEvent;
   }
   await new Promise<void>(() => {});
-}
-
-function stalledFourthEvidence(items: readonly Record<string, unknown>[]): AsyncIterable<ResponseStreamEvent> {
-  return {
-    [Symbol.asyncIterator]() {
-      let index = 0;
-      return {
-        next(): Promise<IteratorResult<ResponseStreamEvent>> {
-          if (index < items.length) {
-            const outputIndex = index;
-            const item = items[index];
-            index += 1;
-            return Promise.resolve({
-              done: false,
-              value: {
-                type: "response.output_item.done",
-                output_index: outputIndex,
-                item,
-                sequence_number: outputIndex + 1,
-              } as unknown as ResponseStreamEvent,
-            });
-          }
-          if (index === items.length) {
-            index += 1;
-            return Promise.resolve({
-              done: false,
-              value: {
-                type: "response.web_search_call.in_progress",
-                item_id: "web-4",
-                output_index: index,
-                sequence_number: index + 1,
-              } as unknown as ResponseStreamEvent,
-            });
-          }
-          return new Promise<IteratorResult<ResponseStreamEvent>>(() => {});
-        },
-        return: () => new Promise<IteratorResult<ResponseStreamEvent>>(() => {}),
-      };
-    },
-  };
-}
-
-function stalledWebAction(callId: string): AsyncIterable<ResponseStreamEvent> {
-  return {
-    [Symbol.asyncIterator]() {
-      let emitted = false;
-      return {
-        next(): Promise<IteratorResult<ResponseStreamEvent>> {
-          if (!emitted) {
-            emitted = true;
-            return Promise.resolve({
-              done: false,
-              value: {
-                type: "response.web_search_call.in_progress",
-                item_id: callId,
-                output_index: 0,
-                sequence_number: 1,
-              } as unknown as ResponseStreamEvent,
-            });
-          }
-          return new Promise<IteratorResult<ResponseStreamEvent>>(() => {});
-        },
-        return: () => new Promise<IteratorResult<ResponseStreamEvent>>(() => {}),
-      };
-    },
-  };
 }
 
 function completed(value: Record<string, unknown>): ResponseStreamEvent {

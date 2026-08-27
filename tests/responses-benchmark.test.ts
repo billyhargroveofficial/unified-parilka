@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { DirectWebLifecycle, directRequest, runDirectResponsesArm } from "../scripts/responses-benchmark/direct.js";
 import { nativeCodexArgs, nativeCodexEnvironment, numericCodexVersion } from "../scripts/responses-benchmark/native.js";
 import { acceptedOutcome } from "../scripts/responses-benchmark/acceptance.js";
-import { assertLiveBenchmarkFiles, assertLiveBenchmarkOptIn, benchmarkArmOrder } from "../scripts/responses-benchmark/runner.js";
+import { assertLiveBenchmarkFiles, assertLiveBenchmarkOptIn, benchmarkArmOrder, benchmarkMethodology } from "../scripts/responses-benchmark/runner.js";
 import { scenarioById } from "../scripts/responses-benchmark/scenarios.js";
 import { BoundedJsonlObserver, nativeTimingKind, nativeTimingObservation, TimingRecorder } from "../scripts/responses-benchmark/timing.js";
 import { BenchmarkConfigurationError } from "../scripts/responses-benchmark/contracts.js";
@@ -78,7 +78,7 @@ test("direct arm registers no local functions and reports only timing plus count
   await request.progress?.onProgress({ type: "hosted_web_completed", callId: "never-reported", ok: true });
   assert.deepEqual(lifecycle.webActions(1), { open_page: 1 });
   const observed: unknown[] = [];
-  const report = await runDirectResponsesArm({ authFile: "/tmp/auth.json", effort: "max" }, scenarioById("ordinary"), {
+  const report = await runDirectResponsesArm({ authFile: "/tmp/auth.json", effort: "max" }, scenarioById("ordinary"), () => ({
     async run(input) {
       observed.push(input);
       return {
@@ -86,7 +86,7 @@ test("direct arm registers no local functions and reports only timing plus count
         usage: { inputTokens: 10, cachedInputTokens: 2, outputTokens: 3, reasoningOutputTokens: 1, totalTokens: 13 },
       } as never;
     },
-  });
+  }));
   assert.equal(observed.length, 1);
   assert.deepEqual(report.events.map((event) => event.kind), ["started", "completed"]);
   assert.equal(report.hostedWebCalls, 0);
@@ -97,6 +97,24 @@ test("direct arm registers no local functions and reports only timing plus count
   assert.equal(serialized.includes("auth.json"), false);
   assert.equal(serialized.includes("HTTP 404"), false);
   assert.equal(serialized.includes("never-reported"), false);
+});
+
+test("direct arm constructs a fresh client from its factory for every arm", async () => {
+  const clients: object[] = [];
+  const createClient = () => {
+    const client = {
+      async run() {
+        return { hostedWebCalls: 0 } as never;
+      },
+    };
+    clients.push(client);
+    return client;
+  };
+  const options = { authFile: "/tmp/auth.json", effort: "max" as const };
+  await runDirectResponsesArm(options, scenarioById("ordinary"), createClient);
+  await runDirectResponsesArm(options, scenarioById("ordinary"), createClient);
+  assert.equal(clients.length, 2);
+  assert.notEqual(clients[0], clients[1]);
 });
 
 test("timing records at most 128 events and exposes only a dropped count", () => {
@@ -121,7 +139,15 @@ test("scenario acceptance distinguishes invalid evidence from native action unce
   }), "invalid");
 });
 
-test("runner alternates AB and BA orders and rejects insecure auth modes", async () => {
+test("runner advertises fresh logical arm modes, alternates AB and BA, and rejects insecure auth modes", async () => {
+  assert.deepEqual(benchmarkMethodology("0.150.1"), {
+    directArm: "fresh_minimal_direct_responses_transport_client_per_arm_no_telegram",
+    nativeArm: "fresh_codex_exec_process_and_cwd_per_arm",
+    connectionMode: "fresh_direct_transport_client_per_arm_vs_native_fresh_process",
+    armOrder: "alternating_fresh_logical_executions_distribution_only",
+    nativeActionFidelity: "limited_cli_jsonl_omits_open_find_semantics",
+    nativeCliVersion: "0.150.1",
+  });
   assert.deepEqual(benchmarkArmOrder(1), ["direct_responses", "native_codex"]);
   assert.deepEqual(benchmarkArmOrder(2), ["native_codex", "direct_responses"]);
   const directory = await mkdtemp(join(tmpdir(), "parilka-benchmark-test-"));

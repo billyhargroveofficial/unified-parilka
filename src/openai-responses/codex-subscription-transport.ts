@@ -61,14 +61,15 @@ export class CodexSubscriptionResponsesTransport implements ResponsesStreamTrans
   ): Promise<AsyncIterable<ResponseStreamEvent>> {
     const wireRequest = codexSubscriptionRequest(request);
     const body = JSON.stringify(wireRequest);
+    const requestId = crypto.randomUUID();
     let snapshot = await this.#auth.snapshot(options.signal);
-    let response = await this.#post(body, snapshot, options.signal);
+    let response = await this.#post(body, snapshot, options.signal, requestId);
     if (response.status === 401) {
       // Exactly one refresh/replay protects against a revoked-but-not-yet-expired
       // bearer without turning a bad credential into an unbounded retry loop.
       await discard(response);
       snapshot = await this.#auth.recoverAfterUnauthorized(snapshot.accessToken, options.signal);
-      response = await this.#post(body, snapshot, options.signal);
+      response = await this.#post(body, snapshot, options.signal, requestId);
     }
     if (!response.ok) {
       const errorBody = await boundedResponseText(response, MAX_ERROR_BODY_CHARS, options.signal);
@@ -80,7 +81,12 @@ export class CodexSubscriptionResponsesTransport implements ResponsesStreamTrans
     return parseCodexSubscriptionSse(response.body, options.signal, serviceTierFromRequest(wireRequest));
   }
 
-  async #post(body: string, auth: CodexSubscriptionAuthSnapshot, signal: AbortSignal): Promise<Response> {
+  async #post(
+    body: string,
+    auth: CodexSubscriptionAuthSnapshot,
+    signal: AbortSignal,
+    requestId: string,
+  ): Promise<Response> {
     try {
       return await this.#fetch(this.#url, {
         method: "POST",
@@ -93,7 +99,7 @@ export class CodexSubscriptionResponsesTransport implements ResponsesStreamTrans
           originator: this.#originator,
           "User-Agent": this.#userAgent,
           "session-id": this.#sessionId,
-          "x-client-request-id": this.#sessionId,
+          "x-client-request-id": requestId,
         },
         body,
         signal,

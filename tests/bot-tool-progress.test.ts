@@ -12,8 +12,7 @@ type PortCall = { kind: "send"; chatId: string; text: string; signal: AbortSigna
   | { kind: "edit"; chatId: string; messageId: number; text: string; signal: AbortSignal }
   | { kind: "delete"; chatId: string; messageId: number; signal: AbortSignal };
 
-function fakePort(overrides: Partial<ToolProgressBotApiPort> = {}):
-ToolProgressBotApiPort & { calls: PortCall[] } {
+function fakePort(overrides: Partial<ToolProgressBotApiPort> = {}): ToolProgressBotApiPort & { calls: PortCall[] } {
   const calls: PortCall[] = [];
   return {
     async sendMessage(chatId, text, signal) {
@@ -53,6 +52,7 @@ function makePublisher(options: {
   initialMessageId?: number;
   signal?: AbortSignal;
   minVisibleMs?: number;
+  operationTimeoutMs?: number;
   now?: () => number;
   scheduler?: ToolProgressScheduler;
 }) {
@@ -68,6 +68,7 @@ function makePublisher(options: {
       store: options.store ?? fakeStore(),
       initialMessageId: options.initialMessageId,
       minVisibleMs: options.minVisibleMs ?? 0,
+      operationTimeoutMs: options.operationTimeoutMs,
       now: options.now ?? (() => 1_000),
       scheduler: options.scheduler,
     }),
@@ -75,6 +76,8 @@ function makePublisher(options: {
 }
 
 async function drain(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
   await Promise.resolve();
   await Promise.resolve();
 }
@@ -467,11 +470,7 @@ test("renderProgressText accumulates exactly one line per tool and truncates", (
   assert.equal(rendered.includes("\n"), false);
 });
 
-function manualClock(): {
-  now: () => number;
-  scheduler: ToolProgressScheduler;
-  advance: (ms: number) => void;
-} {
+function manualClock(): { now: () => number; scheduler: ToolProgressScheduler; advance: (ms: number) => void } {
   let nowMs = 0;
   let nextId = 0;
   const timers = new Map<number, { dueAtMs: number; callback: () => void }>();

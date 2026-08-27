@@ -6,10 +6,11 @@ export const MIN_SYNTHESIS_HOSTED_WEB_CALLS = 3;
 const MAX_REQUIRED_RESEARCH_LEGS = 4;
 const MAX_EVIDENCE_PHASE_MS = 120_000;
 const MIN_SYNTHESIS_RESERVE_MS = 1_000;
+const MAX_RESEARCH_LEG_MS = 45_000;
 const CONTINUATION = [
   "Application research controller: continue the same task before finalizing.",
   "The total target is four successful distinct hosted web actions. Use hosted web now only for a missing evidence gap; do not repeat earlier queries merely to increase the count.",
-  "Prioritize current availability/prices, an open_page/find_in_page check of a relevant market or primary source, ownership risks, and an independent comparison.",
+  "Before finalizing, make at least one hosted open_page fetch attempt for a relevant market or primary source. It may fail, but search-only evidence is not sufficient.",
   "As soon as the total reaches four successful actions, stop calling web and return one revised, self-contained final answer with citations, not a search log.",
 ].join(" ");
 
@@ -17,21 +18,23 @@ export function shouldRequireHostedWeb(options: {
   request: RunResponsesTurnRequest;
   firstLeg: boolean;
   successfulHostedWebCalls: number;
+  hasOpenPageAttempt: boolean;
   requiredResearchLegs: number;
 }): boolean {
   if (options.request.hostedWebSearchPolicy === "required_first_leg") return options.firstLeg;
   return options.request.hostedWebSearchPolicy === "bounded_research" &&
-    options.successfulHostedWebCalls < TARGET_SUCCESSFUL_HOSTED_WEB_CALLS &&
+    (options.successfulHostedWebCalls < TARGET_SUCCESSFUL_HOSTED_WEB_CALLS || !options.hasOpenPageAttempt) &&
     options.requiredResearchLegs < MAX_REQUIRED_RESEARCH_LEGS;
 }
 
 export function shouldContinueBoundedResearch(
   request: RunResponsesTurnRequest,
   successfulHostedWebCalls: number,
+  hasOpenPageAttempt: boolean,
   requiredResearchLegs: number,
 ): boolean {
   return request.hostedWebSearchPolicy === "bounded_research" &&
-    successfulHostedWebCalls < TARGET_SUCCESSFUL_HOSTED_WEB_CALLS &&
+    (successfulHostedWebCalls < TARGET_SUCCESSFUL_HOSTED_WEB_CALLS || !hasOpenPageAttempt) &&
     requiredResearchLegs < MAX_REQUIRED_RESEARCH_LEGS;
 }
 
@@ -39,20 +42,27 @@ export function shouldSynthesizeBoundedResearch(
   request: RunResponsesTurnRequest,
   successfulHostedWebCalls: number,
   attemptedHostedWebCalls: number,
+  hasOpenPageAttempt: boolean,
 ): boolean {
   return request.hostedWebSearchPolicy === "bounded_research" &&
     successfulHostedWebCalls >= MIN_SYNTHESIS_HOSTED_WEB_CALLS &&
     successfulHostedWebCalls < TARGET_SUCCESSFUL_HOSTED_WEB_CALLS &&
-    attemptedHostedWebCalls >= TARGET_SUCCESSFUL_HOSTED_WEB_CALLS;
+    attemptedHostedWebCalls >= TARGET_SUCCESSFUL_HOSTED_WEB_CALLS &&
+    hasOpenPageAttempt;
 }
 
-export function researchContinuationInput(successfulHostedWebCalls: number): Record<string, unknown> {
+export function researchContinuationInput(
+  successfulHostedWebCalls: number,
+  hasOpenPageAttempt: boolean,
+): Record<string, unknown> {
   const remaining = Math.max(1, TARGET_SUCCESSFUL_HOSTED_WEB_CALLS - successfulHostedWebCalls);
   return {
     role: "developer",
     content: [{
       type: "input_text",
-      text: `${CONTINUATION} Exactly ${String(remaining)} additional distinct hosted web action${remaining === 1 ? " is" : "s are"} still required to reach the target of four.`,
+      text: `${CONTINUATION} Exactly ${String(remaining)} additional distinct hosted web action${remaining === 1 ? " is" : "s are"} still required to reach the target of four. ${hasOpenPageAttempt
+        ? "The required open_page fetch attempt is already recorded."
+        : "A hosted open_page fetch attempt is still mandatory before finalization; make it now."}`,
     }],
   };
 }
@@ -89,6 +99,16 @@ export function researchStalledActionGraceMs(evidencePhaseTimeoutMs: number): nu
   return Math.min(20_000, Math.max(100, Math.floor(evidencePhaseTimeoutMs / 6)));
 }
 
+/** No single research leg, including silent tool-free synthesis, owns the whole turn. */
+export function researchLegTimeoutMs(totalTimeoutMs: number): number {
+  return Math.min(MAX_RESEARCH_LEG_MS, Math.max(100, Math.floor(totalTimeoutMs / 3)));
+}
+
+/** Reset on every provider event so an idle stream fails before its leg deadline. */
+export function researchNoProgressTimeoutMs(legTimeoutMs: number): number {
+  return Math.min(20_000, Math.max(100, Math.floor(legTimeoutMs / 2)));
+}
+
 export function researchSynthesisRequest(request: RunResponsesTurnRequest): RunResponsesTurnRequest {
   const { hostedWebSearchPolicy: _policy, localFunctions: _functions, ...rest } = request;
   return { ...rest, hostedWebSearch: false, localFunctions: [] };
@@ -97,11 +117,13 @@ export function researchSynthesisRequest(request: RunResponsesTurnRequest): RunR
 export function hasInsufficientBoundedResearchCoverage(
   request: RunResponsesTurnRequest,
   successfulHostedWebCalls: number,
+  hasOpenPageAttempt: boolean,
   requiredResearchLegs: number,
 ): boolean {
   return request.hostedWebSearchPolicy === "bounded_research" &&
-    requiredResearchLegs >= MAX_REQUIRED_RESEARCH_LEGS &&
-    successfulHostedWebCalls < TARGET_SUCCESSFUL_HOSTED_WEB_CALLS;
+    (successfulHostedWebCalls < TARGET_SUCCESSFUL_HOSTED_WEB_CALLS || !hasOpenPageAttempt) &&
+    (requiredResearchLegs >= MAX_REQUIRED_RESEARCH_LEGS ||
+      successfulHostedWebCalls >= TARGET_SUCCESSFUL_HOSTED_WEB_CALLS);
 }
 
 export function addResponsesUsage(current: ResponsesUsage | undefined, next: ResponsesUsage): ResponsesUsage {

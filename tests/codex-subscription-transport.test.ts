@@ -51,7 +51,10 @@ test("posts directly to Codex backend, refreshes exactly once after 401, and rep
   assert.equal(firstHeaders.get("accept"), "text/event-stream");
   assert.equal(firstHeaders.get("content-type"), "application/json");
   assert.equal(firstHeaders.get("openai-beta"), "responses=experimental");
-  assert.equal(firstHeaders.get("x-client-request-id"), "session-test");
+  const firstRequestId = firstHeaders.get("x-client-request-id");
+  assert.match(firstRequestId ?? "", /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu);
+  const retryHeaders = new Headers(seen[1]?.init.headers);
+  assert.equal(retryHeaders.get("x-client-request-id"), firstRequestId);
   const wireBody = JSON.parse(String(seen[1]?.init.body)) as Record<string, unknown>;
   assert.equal(wireBody.service_tier, "priority");
   assert.equal(wireBody.prompt_cache_key, "parilka:responses:v2");
@@ -62,6 +65,28 @@ test("posts directly to Codex backend, refreshes exactly once after 401, and rep
   assert.equal(completed.response.service_tier, "priority");
   assert.equal(completed.response.output_text, "ok");
   assert.equal((completed.response as Record<string, unknown>).codex_subscription_raw_service_tier, "default");
+});
+
+test("uses a fresh client request id for each logical create operation", async () => {
+  const authFile = await authFixture({
+    access_token: jwt({ exp: 2_000_000_000, chatgpt_account_id: "acct" }), refresh_token: "refresh",
+  });
+  const requestIds: string[] = [];
+  const transport = new CodexSubscriptionResponsesTransport({
+    auth: new CodexSubscriptionAuthStore({ authFile }),
+    sessionId: "session-test",
+    fetch: async (_url, init) => {
+      const requestId = new Headers(init?.headers).get("x-client-request-id");
+      assert.ok(requestId);
+      requestIds.push(requestId);
+      return sseResponse(['data: {"type":"response.done","response":{"id":"resp","model":"gpt-5.6-luna","status":"completed","service_tier":"default","output":[]}}', ""]);
+    },
+  });
+  const signal = new AbortController().signal;
+  await collect(await transport.create(request(), { signal }));
+  await collect(await transport.create(request(), { signal }));
+  assert.equal(requestIds.length, 2);
+  assert.notEqual(requestIds[0], requestIds[1]);
 });
 
 test("aggregates output items and text before yielding a terminal response.done", async () => {

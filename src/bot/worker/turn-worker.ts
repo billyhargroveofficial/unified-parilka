@@ -5,8 +5,10 @@ import {
   type TelegramPublication,
 } from "../telegram-publication.js";
 import {
+  DEFAULT_PROGRESS_OPERATION_TIMEOUT_MS,
   ToolProgressPublisher,
   type ToolProgressBotApiPort,
+  type ToolProgressDeleteResult,
 } from "../tool-progress.js";
 import {
   startTypingHeartbeat,
@@ -224,6 +226,7 @@ export class BotTurnWorker {
             store: this.#store,
             initialMessageId: turn.progressMessageId,
             now: this.#now,
+            scheduler: this.#scheduler,
           })
         : undefined;
       timers = startTurnTimers({
@@ -462,11 +465,13 @@ export class BotTurnWorker {
       return undefined;
     }
     try {
-      const result = await this.#toolProgressBotApiPort.deleteMessage(
+      const result = await this.#deleteTerminalProgress(
         candidate.chatId,
         messageId,
-        new AbortController().signal,
       );
+      if (result === undefined) {
+        throw new Error("Tool progress terminal cleanup deadline exceeded.");
+      }
       const terminalRefusal = !result.ok && result.terminal === true;
       if (result.ok || terminalRefusal) {
         this.#store.clearTerminalBotTurnProgressIfMatches(
@@ -491,6 +496,42 @@ export class BotTurnWorker {
       turnId: candidate.id,
     });
     return { status: "idle", retryAfterMs: PROGRESS_CLEANUP_RETRY_MS };
+  }
+
+  /** Terminal cleanup is presentation-only and cannot stall the FIFO worker. */
+  async #deleteTerminalProgress(
+    chatId: string,
+    messageId: number,
+  ): Promise<ToolProgressDeleteResult | undefined> {
+    const controller = new AbortController();
+    return new Promise((resolve) => {
+      let settled = false;
+      let timeoutHandle: unknown;
+      const done = (result: ToolProgressDeleteResult | undefined) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        this.#scheduler.clearTimeout(timeoutHandle);
+        resolve(result);
+      };
+      timeoutHandle = this.#scheduler.setTimeout(() => {
+        controller.abort(new Error("Tool progress terminal cleanup deadline exceeded."));
+        done(undefined);
+      }, DEFAULT_PROGRESS_OPERATION_TIMEOUT_MS);
+      try {
+        void this.#toolProgressBotApiPort!.deleteMessage(
+          chatId,
+          messageId,
+          controller.signal,
+        ).then(
+          (result) => done(result),
+          () => done(undefined),
+        );
+      } catch {
+        done(undefined);
+      }
+    });
   }
 
   #progressCleanupRetryAfter(nowMs: number): number | undefined {

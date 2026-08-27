@@ -103,9 +103,13 @@ Developer instructions и tool policy передаются заново в ка�
 11. [x] Переключить interactive Luna на hard-pinned `xhigh`; отображать
     provider `action.queries[]` и параллельные hosted items как компактные
     `web_search ×N` / `web_fetch ×N` строки, сохраняя late relabel по call id.
-12. [ ] Устранить подтверждённые long-tail defects: bounded Telegram progress
-    I/O на terminal path, уникальный per-request correlation id и отдельный
-    synthesis/no-progress watchdog для bounded research; затем повторить
+12. [x] Устранить подтверждённые long-tail defects: пятисекундный host deadline
+    для Telegram progress/cleanup I/O, уникальный request id на логическую
+    Responses operation с сохранением только для её 401 replay, обязательную
+    попытку `open_page` и отдельный 45-секундный leg/synthesis/no-progress
+    watchdog для bounded research. Не допускать durable failure на oversized
+    provider final, распознавать естественные `глубокий веб-ресерч` формы,
+    ограничить citation footer четырьмя distinct pages и повторить
     timeout/deep-research E2E.
 
 ## Target Files
@@ -141,20 +145,25 @@ web/open, image и causal-history E2E.
 
 ## Current Verification Status
 
-- `npm run verify:responses` повторно green 2026-08-27 после xhigh/batch
-  изменений: typecheck, shell/architecture/systemd, полный offline test suite,
-  48/48 BGE-M3 contract tests, retrieval recall@5 `0.944` при target `0.75`,
-  secret scan, mtcute/MCP smokes, `npm audit` с 0 vulnerabilities и immutable
-  release build.
-- Production `parilka-bot.service` исполняет release
-  `20260827190248558-3286437-39e81926cd87`; preflight admitted exact
-  `gpt-5.6-luna` + effective `priority`, runtime log фиксирует code-owned
-  `reasoningEffort: "xhigh"`, один poller active, restart count 0.
-- Live subscription shape probe вернул один `web_search_call` с четырьмя
-  `action.queries`. Маркированный Telegram E2E поймал последовательные transient
-  snapshots `web_search ×1` → `web_search ×4`, затем Rich final с footer
-  `GPT-5.6 Luna Fast xhigh`; progress удалился штатно, все E2E trigger/final
-  сообщения после проверки удалены и повторно отсутствуют в history.
+- Финальный `npm run verify:responses` green 2026-08-27: typecheck,
+  shell/architecture/systemd, полный offline test suite, 48/48 BGE-M3 contract
+  tests, retrieval recall@5 `0.944` при target `0.75`, secret scan,
+  mtcute/MCP smokes, `npm audit` с 0 vulnerabilities и immutable release
+  `20260827201057153-3455970-59745dfc9e01`.
+- Production `parilka-bot.service` исполняет этот exact release; preflight
+  admitted `gpt-5.6-luna` + effective `priority`, runtime log фиксирует
+  code-owned `reasoningEffort: "xhigh"`, один poller active, restart count 0.
+- Честный live benchmark свежих logical arms без Telegram на Luna/xhigh:
+  direct Responses против native Codex CLI 0.150.1 — ordinary
+  `1.759s / 3.730s`, web `6.495s / 14.908s`, fetch
+  `8.823s / 15.982s`; direct arm точно наблюдал `search + open_page`, а native
+  fetch остался `unverifiable`, потому что CLI JSONL не раскрывает action type.
+- Финальный маркированный Telegram E2E на exact production release начал
+  visible progress примерно за секунду, накопил один bubble с
+  `web_search ×7` и `web_fetch ×1`, завершился terminal `sent` за `33.438s`
+  с footer `GPT-5.6 Luna Fast xhigh · tools 4`; citation footer ограничился
+  ровно четырьмя distinct-page links. Progress удалён штатно, trigger/final
+  удалены через Telegram MCP, marker повторно отсутствует в search history.
 - Read-only live-DB RAG benchmark на 23 212 BGE-M3/1024 chunks: три полных
   BM25+dense+sparse+rerank запроса за `0.696–0.908 s`, по 8 evidence. Dense и
   sparse отсекают chunk до scoring только при `end_message_id < trigger`, так
@@ -198,3 +207,23 @@ dirty-worktree, single-owner и secret-isolation. Не закрывай goal д�
 bounded terminal progress I/O, корректного per-request correlation id,
 synthesis watchdog, зелёного `npm run verify:responses` и повторного живого
 deep-research E2E без зависшего progress/final tail.
+
+## Final Status
+
+- Goal verified complete 2026-08-27: production model path — прямой чистый
+  TypeScript Responses transport на Codex subscription; Hermes, Codex CLI и
+  app-server не участвуют в bot runtime.
+- Закрыты long-tail stalls presentation I/O, request correlation/401 replay,
+  bounded research/fetch admission, per-leg/no-progress watchdogs, oversized
+  final publication, natural deep-web intent, batched hosted-tool rendering и
+  bounded citation footer.
+- Canonical gate, live direct-vs-native benchmark, controlled restart и
+  очищенный Telegram E2E прошли; commit/push были явно разрешены пользователем
+  и выполняются в closeout. Rollback/state backups сохранены.
+- Остаточное provider-ограничение: один native hosted batch может содержать
+  больше четырёх search actions до того, как host увидит stream boundary;
+  transient `×N` показывает этот факт честно, а host публикует только один
+  bounded synthesis final. Native Codex CLI JSONL также не доказывает различие
+  `open_page`/`find_in_page`, поэтому его fetch-arm остаётся unverifiable.
+- Production disposition: healthy, один poller, `NRestarts=0`, exact release
+  `20260827201057153-3455970-59745dfc9e01`.

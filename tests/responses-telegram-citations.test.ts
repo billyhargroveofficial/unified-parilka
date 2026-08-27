@@ -54,6 +54,13 @@ test("uses a bounded numbered fallback title", () => {
   );
 });
 
+test("keeps a long but bounded HTTPS destination", () => {
+  const url = `https://example.com/${"a".repeat(4_000)}`;
+  const footer = renderTelegramUrlCitations([{ type: "url_citation", url, title: "Длинный источник" }]);
+
+  assert.equal(footer, `\n\nИсточники:\n- [Длинный источник](${url})`);
+});
+
 test("omits a footer citation already linked in final Markdown but retains missing ones", () => {
   const footer = renderTelegramUrlCitations([
     { type: "url_citation", url: "https://developers.openai.com/api/docs/models/gpt-5.6-luna?utm_source=openai", title: "GPT-5.6 Luna" },
@@ -61,4 +68,56 @@ test("omits a footer citation already linked in final Markdown but retains missi
   ], "Официальная [документация](https://developers.openai.com/api/docs/models/gpt-5.6-luna?utm_source=openai).");
 
   assert.equal(footer, "\n\nИсточники:\n- [Дополнительно](https://example.com/extra)");
+});
+
+test("collapses tracking variants and a bare final URL into distinct page citations", () => {
+  const footer = renderTelegramUrlCitations([
+    { type: "url_citation", url: "https://nodejs.org/en/download?utm_source=feed", title: "nodejs.org" },
+    { type: "url_citation", url: "https://nodejs.org/en/download?fbclid=tracking", title: "nodejs.org" },
+    { type: "url_citation", url: "https://nodejs.org/en/about/previous-releases", title: "nodejs.org" },
+    { type: "url_citation", url: "https://nodejs.org/en/about/eol", title: "nodejs.org" },
+  ], "Официальный источник: https://nodejs.org/en/download.");
+
+  assert.equal(
+    footer,
+    "\n\nИсточники:\n- [nodejs.org — /en/about/previous-releases](https://nodejs.org/en/about/previous-releases)\n- [nodejs.org — /en/about/eol](https://nodejs.org/en/about/eol)",
+  );
+});
+
+test("preserves distinct semantic query pages and bounds the citation footer", () => {
+  const footer = renderTelegramUrlCitations([
+    { type: "url_citation", url: "https://example.com/article?id=2", title: "example.com" },
+    { type: "url_citation", url: "https://example.com/article?id=3", title: "example.com" },
+    { type: "url_citation", url: "https://example.com/a", title: "A" },
+    { type: "url_citation", url: "https://example.com/b", title: "B" },
+    { type: "url_citation", url: "https://example.com/c", title: "C" },
+  ]);
+
+  assert.equal(
+    footer,
+    "\n\nИсточники:\n- [example.com — /article?id=2](https://example.com/article?id=2)\n- [example.com — /article?id=3](https://example.com/article?id=3)\n- [A](https://example.com/a)\n- [B](https://example.com/b)",
+  );
+  assert.doesNotMatch(footer, /example\.com\/c/u);
+});
+
+test("trims typographic prose punctuation after a bare final URL", () => {
+  const footer = renderTelegramUrlCitations([
+    { type: "url_citation", url: "https://example.com/article", title: "Статья" },
+  ], "Читай «https://example.com/article».");
+
+  assert.equal(footer, "");
+});
+
+test("keeps query order and fragments as part of citation identity", () => {
+  const footer = renderTelegramUrlCitations([
+    { type: "url_citation", url: "https://example.com/doc?a=1&b=2", title: "example.com" },
+    { type: "url_citation", url: "https://example.com/doc?b=2&a=1", title: "example.com" },
+    { type: "url_citation", url: "https://example.com/doc#one", title: "example.com" },
+    { type: "url_citation", url: "https://example.com/doc#two", title: "example.com" },
+  ]);
+
+  assert.match(footer, /\/doc\?a=1&b=2/u);
+  assert.match(footer, /\/doc\?b=2&a=1/u);
+  assert.match(footer, /\/doc#one/u);
+  assert.match(footer, /\/doc#two/u);
 });
