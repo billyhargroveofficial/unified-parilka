@@ -37,3 +37,32 @@ test("stop settles when an in-flight terminal result completes during shutdown",
   assert.deepEqual(await stopping, { drained: true, activeWorkers: 0 });
   assert.equal(calls, 1);
 });
+
+test("a hanging maintenance send cannot occupy a user-turn worker slot", async () => {
+  let maintenanceStarted!: () => void;
+  const started = new Promise<void>((resolve) => { maintenanceStarted = resolve; });
+  let releaseMaintenance!: () => void;
+  const blocked = new Promise<void>((resolve) => { releaseMaintenance = resolve; });
+  const maintenance = new BotWorkerPump({ workers: [{ async runOnce() {
+    maintenanceStarted();
+    await blocked;
+    return { status: "idle" };
+  } }] });
+  let userCalls = 0;
+  const users = new BotWorkerPump({ workers: [{ async runOnce() {
+    userCalls += 1;
+    return { status: "idle" };
+  } }] });
+
+  maintenance.start();
+  await started;
+  users.start();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(userCalls, 1);
+  await users.stop(1_000);
+  releaseMaintenance();
+  assert.deepEqual(await maintenance.stop(1_000), {
+    drained: true,
+    activeWorkers: 0,
+  });
+});

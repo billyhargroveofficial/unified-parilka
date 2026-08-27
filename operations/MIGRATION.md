@@ -25,9 +25,12 @@ rewritten to make this migration look deployed.
 - hard pin `gpt-5.6-luna` with Fast wire `service_tier: "priority"`;
 - hosted web search/open/find supplied in every bot request;
 - trusted Telegram image input sent directly to Responses;
-- exactly five host read-only history/cache tools;
+- exactly six host read-only history/cache tools, including causal exact-skill
+  progressive disclosure;
 - causal local BGE-M3 RAG, bounded local fallback and strict trigger cutoff;
 - immediate typing, safe transient tool progress and native rich final reply;
+- one atomic, bounded nightly Dream digest queued by tokenless maintenance and
+  delivered later by the Bot owner;
 - one writable owner-only Codex OAuth state shared by bot and digest, never
   from a checked-in environment file.
 

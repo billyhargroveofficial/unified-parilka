@@ -18,6 +18,10 @@ domain method modules are prototype contributors, not independent repositories.
   transaction; local BGE-M3 output does not bypass source checks.
 - Bot turns persist a final draft before the sending fence. A later pre-send
   retry may use that draft; `sending` ambiguity becomes terminal `lost_ack`.
+- Dream audit, completed-day state and its public publication are committed in
+  one transaction. The tokenless maintenance writer only queues that bounded
+  publication; the Bot owner claims and sends it. Ambiguous post-send
+  acknowledgement becomes terminal `lost_ack`, never an automatic resend.
 
 Current schema may retain historical Codex-session objects for migration
 compatibility, but the direct Responses runtime does not read, create or depend
@@ -32,6 +36,9 @@ durable turn state.
   publication states.
 - `chat-knowledge.ts`, `dream-days.ts`, `dream-commit.ts`, `dream-audit.ts`:
   chat memory and offline consolidation.
+- `dream-publications.ts`: durable post-commit public Dream-digest queue;
+  digests contain only audit-derived names/titles/counts, never stored memory
+  or skill/review content.
 - `digests.ts`, `embeddings.ts`: cached summaries and retrieval coverage.
 - `send-outbox.ts`, `sync-ops.ts`, `status.ts`: delivery, sync and health.
 

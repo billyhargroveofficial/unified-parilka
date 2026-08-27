@@ -159,7 +159,7 @@ test("version 15 database upgrades chat knowledge once and stays idempotent", (t
 
   const migrated = new MessageStore(dbPath);
   try {
-    assert.equal(migrated.getSchemaVersion(), 23);
+    assert.equal(migrated.getSchemaVersion(), 24);
     migrated.upsertChatLesson({
       chatId: CHAT_A,
       title: "Migration lesson",
@@ -175,7 +175,7 @@ test("version 15 database upgrades chat knowledge once and stays idempotent", (t
 
   const reopened = new MessageStore(dbPath);
   try {
-    assert.equal(reopened.getSchemaVersion(), 23);
+    assert.equal(reopened.getSchemaVersion(), 24);
     assert.equal(reopened.listChatLessons(CHAT_A).length, 1);
   } finally {
     reopened.close();

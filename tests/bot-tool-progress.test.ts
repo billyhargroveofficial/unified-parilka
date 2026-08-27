@@ -219,7 +219,7 @@ test("uses error icon for failed tools", async () => {
   assert.equal(edit?.text, "✗ web_search");
 });
 
-test("shows an allowlisted local-history query and clamps it to three lines", async () => {
+test("shows an allowlisted tool selector in one compact line", async () => {
   const port = fakePort();
   const { publisher } = makePublisher({ port });
 
@@ -237,11 +237,10 @@ test("shows an allowlisted local-history query and clamps it to three lines", as
     .filter((call) => call.kind === "send" || call.kind === "edit")
     .map((call) => call.text);
   const first = String(texts[0]);
-  const lines = first.split("\n");
-  assert.equal(lines.length, 4);
-  assert.equal(lines[0], "⏳ keyword_search");
-  assert.match(lines[1] ?? "", /^  запрос: q+/);
-  assert.match(lines[3] ?? "", /…$/);
+  assert.equal(first.includes("\n"), false);
+  assert.match(first, /^⏳ keyword_search · q+/u);
+  assert.match(first, /…$/u);
+  assert.ok(Array.from(first).length <= 48);
   assert.equal(texts.length, 1);
 });
 
@@ -450,7 +449,7 @@ test("a rejected progress edit keeps its known bubble eligible for terminal clea
   assert.equal(publisher.state, "none");
 });
 
-test("renderProgressText joins statuses and truncates", () => {
+test("renderProgressText accumulates exactly one line per tool and truncates", () => {
   const pending = new Map([
     ["a", { kind: "tool" as const, toolName: "rag_bm25_search", state: "running" as const }],
     ["b", { kind: "tool" as const, toolName: "web_search", state: "ok" as const }],
@@ -463,8 +462,9 @@ test("renderProgressText joins statuses and truncates", () => {
 
   const long = new Map([["x", { kind: "tool" as const, toolName: "very_long_tool_name", state: "running" as const }]]);
   const rendered = renderProgressText(long, 10);
-  assert.equal(rendered.length, 10);
+  assert.equal(Array.from(rendered).length, 10);
   assert.equal(rendered.at(-1), "…");
+  assert.equal(rendered.includes("\n"), false);
 });
 
 function manualClock(): {

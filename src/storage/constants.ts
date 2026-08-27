@@ -4,11 +4,19 @@ export const SQLITE_BUSY_RETRY_ATTEMPTS = 6;
 
 export const SQLITE_BUSY_RETRY_INITIAL_MS = 25;
 
-export const SCHEMA_VERSION = 23;
+export const SCHEMA_VERSION = 24;
 
 export const DEFAULT_BOT_MAX_ATTEMPTS = 3;
 
 export const MAX_BOT_ATTEMPTS = 20;
+
+/** Bounded known-rejection retries for an unthreaded Dream digest. */
+export const DEFAULT_DREAM_PUBLICATION_MAX_ATTEMPTS = 3;
+
+export const MAX_DREAM_PUBLICATION_ATTEMPTS = 20;
+
+export const DREAM_PUBLICATION_RESTART_LOST_ACK_ERROR =
+  "Dream publication was in-flight during bot restart; Telegram delivery state is unknown and automatic retry is refused.";
 
 export const MIN_BOT_LEASE_MS = 100;
 

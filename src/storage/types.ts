@@ -269,6 +269,35 @@ export type StoredSendOutboxItem = {
   expiresAtMs: number;
 };
 
+/** A maintenance-created, unthreaded chat notification. Never a bot turn. */
+export type DreamPublicationStatus =
+  | "queued"
+  | "sending"
+  | "sent"
+  | "failed"
+  | "lost_ack";
+
+export type StoredDreamPublication = {
+  id: string;
+  dedupeKey: string;
+  payloadHash: string;
+  chatId: string;
+  markdown: string;
+  plainText: string;
+  status: DreamPublicationStatus;
+  attempts: number;
+  maxAttempts: number;
+  leaseOwner?: string;
+  retryNotBeforeMs?: number;
+  telegramMessageId?: number;
+  error?: string;
+  createdAtMs: number;
+  updatedAtMs: number;
+  sendingAtMs?: number;
+  sentAtMs?: number;
+  completedAtMs?: number;
+};
+
 export type SendReservation =
   | {
       kind: "queued";

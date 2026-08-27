@@ -7,11 +7,11 @@ subscription Responses loop: no Hermes gateway, no model child process and no
 dependency on this machine's shared `codex-remote-control.service`.
 
 ```text
-Telegram Bot API -> parilka-bot -> SQLite WAL v23 <- parilka-sync (MTProto)
+Telegram Bot API -> parilka-bot -> SQLite WAL v24 <- parilka-sync (MTProto)
                          |                 |
                          v                 +-> 127.0.0.1:8766/mcp
           Codex subscription Responses: gpt-5.6-luna / Fast (priority wire)
-             | hosted web_search + five local read tools
+             | hosted web_search + six local read tools
              + direct trusted Telegram image input
 
 parilka-maintain + parilka-digests -> SQLite + direct Responses maintenance loop
@@ -22,7 +22,9 @@ parilka-maintain + parilka-digests -> SQLite + direct Responses maintenance loop
   ACK, leases a turn, publishes once, and never lets model state replace its
   delivery state machine.
 - `parilka-maintain` runs bounded SQLite maintenance; `parilka-digests`
-  produces day/week summaries and Dream work.
+  produces day/week summaries and nightly Dream work. Maintenance has no Bot
+  token: after a successful Dream commit it can only durably queue one public
+  digest for the Bot owner to deliver.
 - The shared `telegram-mcp.service` on `127.0.0.1:8765` is a separate machine
   service and is out of scope.
 
@@ -31,38 +33,51 @@ parilka-maintain + parilka-digests -> SQLite + direct Responses maintenance loop
 The bot hard-pins `gpt-5.6-luna` with Fast policy (`service_tier: "priority"`
 on the wire); neither model nor tier is an environment selector. Each chat
 Responses request includes the
-hosted `web_search` tool. Search, open-page and find-in-page actions happen in
-the same server-side request and are rendered as safe Telegram progress, not as
-raw URLs, queries or tool output. Citations in the final response are converted
-to a compact clickable Telegram footer.
+hosted `web_search` tool. Search, fetch and find-in-page actions happen in the
+same server-side request. One temporary Telegram message accumulates one short
+English row per tool call, with only the bounded value (query, URL host/path or
+find pattern) and no redundant argument-key prefix;
+URL credentials/query/hash, arbitrary arguments and tool output remain hidden.
+Citations in the final response are converted to a compact clickable footer.
 
 The model can receive a validated Telegram image directly as `input_image`
 (high detail). It has no shell, terminal, filesystem, Telegram write or delete
-tool. The only local functions are read-only and exactly five:
+tool. The only local functions are read-only and exactly six:
 
 - `rag_bm25_search`
 - `keyword_search`
 - `read_chat_slice`
 - `day_digest`
 - `thread_context`
+- `load_chat_skill` — loads one exact same-chat skill chosen by its name
 
 The pre-turn causal RAG packet is local: recent/reply context plus bounded
 hybrid BGE-M3 retrieval on loopback (`127.0.0.1:8767` by default), optional
-local rerank and temporal digests. It enforces `message_id < trigger`, so a
-future message cannot leak into a turn. Retrieval degradation falls back to
-bounded local context; it does not invent external search.
+local rerank, indexed skill names/descriptions and temporal digests. A full
+skill is loaded only through `load_chat_skill`, for the exact same chat and
+strictly before the trigger. All history reads enforce `message_id < trigger`,
+so a future message cannot leak into a turn. Retrieval degradation falls back
+to bounded local context; it does not invent external search.
 
 After a turn is leased the bot sends Telegram `typing` immediately and keeps a
-heartbeat. Thinking, hosted web, image processing and the five valid local
+heartbeat. Thinking, hosted web, image processing and the six valid local
 tools update one transient progress message. Successful completion transitions
 are folded into the next tool-start snapshot, repeated continuation-thinking is
 suppressed, and the per-turn snapshot count is hard-bounded so presentation can
 never consume Telegram's allowance needed by the final reply. The bubble is
 deleted before the final rich message and never becomes chat corpus/digest input.
 
+Dream's internal review reads/writes are not rendered as fake live tool calls:
+they are staged and may be rolled back. Once a nightly Dream day commits, it
+atomically queues at most one permanent `Dream digest` for the chat. The Bot
+owner sends it later; it contains only bounded changed skill names, lesson/note
+titles and counts, never skill instructions, memory text, review prompts or
+tool payloads.
+
 Every final rich reply ends with one host-rendered italic status line: pinned
 Luna/Fast, the completed leg's actual input-token count against Luna's 272k
-context window, and the subscription's weekly allowance when available. The
+context window, hosted-web plus local tool-call count, whole-run duration and
+the subscription's weekly allowance when available. The
 quota reader uses the same OAuth identity against the Codex usage endpoint in
 parallel with the turn; it serves a short TTL/stale cache and never delays,
 changes, or enters a model request. When that optional endpoint is unavailable,

@@ -193,6 +193,46 @@ declare protected applyMaintenanceSchema: () => void;
     `);
   }
 
+  /**
+   * Separates unthreaded maintenance publication from inbound bot turns and
+   * the in-memory send-throttler audit rows. A `sending` row is a delivery
+   * fence: recovery converts it to lost_ack rather than replaying it.
+   */
+  protected applyBotDreamPublicationsMigration(): void {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS bot_dream_publications (
+        id TEXT PRIMARY KEY,
+        dedupe_key TEXT NOT NULL UNIQUE,
+        payload_hash TEXT NOT NULL,
+        chat_id TEXT NOT NULL,
+        markdown TEXT NOT NULL,
+        plain_text TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('queued', 'sending', 'sent', 'failed', 'lost_ack')),
+        attempts INTEGER NOT NULL DEFAULT 0,
+        max_attempts INTEGER NOT NULL,
+        lease_owner TEXT,
+        retry_not_before_ms INTEGER,
+        telegram_message_id INTEGER,
+        error TEXT,
+        created_at_ms INTEGER NOT NULL,
+        updated_at_ms INTEGER NOT NULL,
+        sending_at_ms INTEGER,
+        sent_at_ms INTEGER,
+        completed_at_ms INTEGER,
+        CHECK(length(trim(id)) > 0),
+        CHECK(length(trim(dedupe_key)) > 0),
+        CHECK(length(trim(payload_hash)) > 0),
+        CHECK(length(trim(chat_id)) > 0),
+        CHECK(length(trim(markdown)) > 0),
+        CHECK(length(trim(plain_text)) > 0),
+        CHECK(attempts >= 0),
+        CHECK(max_attempts >= 1)
+      );
+      CREATE INDEX IF NOT EXISTS idx_bot_dream_publications_due
+        ON bot_dream_publications(chat_id, status, retry_not_before_ms, created_at_ms);
+    `);
+  }
+
   protected applyRecentCatchupMigration(): void {
     this.ensureColumn("sync_state", "recent_catchup_min_id", "INTEGER");
     this.ensureColumn("sync_state", "recent_catchup_next_offset_id", "INTEGER");

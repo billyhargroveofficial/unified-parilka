@@ -13,57 +13,57 @@ function tempDbPath(t: { after(fn: () => void): void }): string {
   return join(dir, "messages.sqlite");
 }
 
-test("schema version 23 is supported and version 24 is rejected", (t) => {
+test("schema version 24 is supported and version 25 is rejected", (t) => {
   const dbPath = tempDbPath(t);
   const store = new MessageStore(dbPath);
   store.close();
 
-  const v23 = new DatabaseSync(dbPath);
-  try {
-    assert.equal(
-      Number((v23.prepare("PRAGMA user_version").get() as Record<string, unknown> | undefined)?.user_version),
-      23,
-    );
-  } finally {
-    v23.close();
-  }
-
   const v24 = new DatabaseSync(dbPath);
   try {
-    v24.exec("PRAGMA user_version = 24");
+    assert.equal(
+      Number((v24.prepare("PRAGMA user_version").get() as Record<string, unknown> | undefined)?.user_version),
+      24,
+    );
   } finally {
     v24.close();
   }
+
+  const v25 = new DatabaseSync(dbPath);
+  try {
+    v25.exec("PRAGMA user_version = 25");
+  } finally {
+    v25.close();
+  }
   assert.throws(
     () => new MessageStore(dbPath),
-    /schema version 24 is newer than supported version 23/,
+    /schema version 25 is newer than supported version 24/,
   );
 });
 
-test("python import target guard accepts v23 and rejects v24", (t) => {
+test("python import target guard accepts v24 and rejects v25", (t) => {
   const dbPath = tempDbPath(t);
-  const v23 = new DatabaseSync(dbPath);
+  const v24 = new DatabaseSync(dbPath);
   try {
-    v23.exec(`
+    v24.exec(`
       CREATE TABLE chats (chat_id TEXT PRIMARY KEY);
       CREATE TABLE messages (chat_id TEXT, message_id INTEGER, text TEXT);
       CREATE TABLE sync_state (chat_id TEXT PRIMARY KEY);
       CREATE TABLE history_jobs (job_id TEXT PRIMARY KEY, status TEXT, started_at TEXT);
-      PRAGMA user_version = 23;
+      PRAGMA user_version = 24;
     `);
-  } finally {
-    v23.close();
-  }
-  assert.doesNotThrow(() => assertSuitableTarget(dbPath));
-
-  const v24 = new DatabaseSync(dbPath);
-  try {
-    v24.exec("PRAGMA user_version = 24");
   } finally {
     v24.close();
   }
+  assert.doesNotThrow(() => assertSuitableTarget(dbPath));
+
+  const v25 = new DatabaseSync(dbPath);
+  try {
+    v25.exec("PRAGMA user_version = 25");
+  } finally {
+    v25.close();
+  }
   assert.throws(
     () => assertSuitableTarget(dbPath),
-    /Target schema version 24 is unsupported/,
+    /Target schema version 25 is unsupported/,
   );
 });

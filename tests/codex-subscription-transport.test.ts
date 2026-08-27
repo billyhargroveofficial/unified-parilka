@@ -54,7 +54,7 @@ test("posts directly to Codex backend, refreshes exactly once after 401, and rep
   assert.equal(firstHeaders.get("x-client-request-id"), "session-test");
   const wireBody = JSON.parse(String(seen[1]?.init.body)) as Record<string, unknown>;
   assert.equal(wireBody.service_tier, "priority");
-  assert.equal(wireBody.prompt_cache_key, "parilka:responses:v1");
+  assert.equal(wireBody.prompt_cache_key, "parilka:responses:v2");
   assert.equal("max_output_tokens" in wireBody, false);
   assert.equal("max_tool_calls" in wireBody, false);
   const completed = events.at(-1) as unknown as { type: string; response: { service_tier: string; output_text: string } };
@@ -199,7 +199,7 @@ test("transport cancels oversized HTTP errors and SSE pending data", async () =>
 
 function request(): ResponsesCreateRequest {
   return {
-    model: "gpt-5.6-luna", service_tier: "priority", reasoning: { effort: "low" }, store: false, stream: true, prompt_cache_key: "parilka:responses:v1",
+    model: "gpt-5.6-luna", service_tier: "priority", reasoning: { effort: "low" }, store: false, stream: true, prompt_cache_key: "parilka:responses:v2",
     instructions: "x", input: [], tools: [], include: ["reasoning.encrypted_content"], max_tool_calls: 1, parallel_tool_calls: false,
     max_output_tokens: 64,
   };

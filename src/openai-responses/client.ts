@@ -17,6 +17,7 @@ import {
   type ResponsesStreamTransport,
   type ResponsesUsage,
   type ResponsesWebAction,
+  type ResponsesWebProgressInput,
   type RunResponsesTurnRequest,
   type RunResponsesTurnResult,
   ResponsesTurnCancelledError,
@@ -67,6 +68,7 @@ export class OpenAiResponsesTurnClient {
     let input = userInput(request.text, request.image);
     let firstLeg = true;
     let functionCalls = 0;
+    const hostedWebCallIds = new Set<string>();
     let functionOutputChars = 0;
     try {
       for (;;) {
@@ -78,6 +80,7 @@ export class OpenAiResponsesTurnClient {
           maxFunctionCalls,
         });
         const functions = functionCallsFrom(leg.response.output);
+        for (const callId of leg.hostedWebCallIds) hostedWebCallIds.add(callId);
         if (functions.length === 0) {
           const text = leg.response.output_text;
           if (text.length === 0) throw new ResponsesTurnError("Responses completed without final text.");
@@ -91,6 +94,7 @@ export class OpenAiResponsesTurnClient {
             finishStatus: "completed",
             ...(usageFrom(leg.response) === undefined ? {} : { usage: usageFrom(leg.response) }),
             serviceTier: leg.serviceTier,
+            hostedWebCalls: hostedWebCallIds.size,
           };
         }
         const callsAlreadyDispatched = functionCalls;
@@ -132,6 +136,7 @@ export class OpenAiResponsesTurnClient {
     response: Response;
     model: typeof OPENAI_RESPONSES_MODEL;
     serviceTier: EffectiveResponsesServiceTier;
+    hostedWebCallIds: readonly string[];
   }> {
     const thinkingCallId = `thinking:${crypto.randomUUID()}`;
     // This is deliberately before the awaited HTTP create: Telegram gets an
@@ -141,7 +146,7 @@ export class OpenAiResponsesTurnClient {
     const activeWebSearches = new Set<string>();
     const startedWebSearches = new Set<string>();
     const completedWebSearches = new Set<string>();
-    const announcedActions = new Map<string, ResponsesWebAction>();
+    const announcedWebDetails = new Map<string, string>();
     const completeThinking = async (ok: boolean): Promise<void> => {
       if (!thinking) return;
       thinking = false;
@@ -150,17 +155,20 @@ export class OpenAiResponsesTurnClient {
     const startWebSearch = async (
       callId: string,
       action?: ResponsesWebAction,
+      input?: ResponsesWebProgressInput,
       completedOk = true,
     ): Promise<void> => {
+      const announced = webProgressFingerprint(action ?? "search", input);
       if (completedWebSearches.has(callId)) {
         // On the subscription wire the granular `completed` event arrives
         // before `output_item.done`, which is the first event carrying action
         // metadata. Re-label the already completed presentation item once so
         // native open_page/find_in_page never masquerade as generic search.
-        if (action !== undefined && announcedActions.get(callId) !== action) {
-          announcedActions.set(callId, action);
+        if (action !== undefined && announcedWebDetails.get(callId) !== announced) {
+          announcedWebDetails.set(callId, announced);
           await progress(options.request, {
             type: "hosted_web_action", callId, action,
+            ...(input === undefined ? {} : { input }),
           });
           await progress(options.request, {
             type: "hosted_web_completed", callId, ok: completedOk,
@@ -175,15 +183,19 @@ export class OpenAiResponsesTurnClient {
         await progress(options.request, {
           type: "hosted_web_started", callId,
           ...(action === undefined ? {} : { action }),
+          ...(input === undefined ? {} : { input }),
         });
         // Missing early metadata is presented as search by the Telegram
         // projection, so remember that same fallback for late-action dedupe.
-        announcedActions.set(callId, action ?? "search");
+        announcedWebDetails.set(callId, announced);
       }
-      if (wasStarted && action !== undefined && announcedActions.get(callId) !== action) {
-        announcedActions.set(callId, action);
+      if (wasStarted && action !== undefined && announcedWebDetails.get(callId) !== announced) {
+        announcedWebDetails.set(callId, announced);
         if (startedWebSearches.has(callId)) {
-          await progress(options.request, { type: "hosted_web_action", callId, action });
+          await progress(options.request, {
+            type: "hosted_web_action", callId, action,
+            ...(input === undefined ? {} : { input }),
+          });
         }
       }
     };
@@ -224,7 +236,7 @@ export class OpenAiResponsesTurnClient {
           const web = webSearchItem(event.item);
           if (web !== undefined) {
             await completeThinking(true);
-            await startWebSearch(web.callId, web.action, web.ok);
+            await startWebSearch(web.callId, web.action, web.input, web.ok);
             if (event.type === "response.output_item.done") {
               await completeWebSearch(web.callId, web.ok);
             }
@@ -246,7 +258,7 @@ export class OpenAiResponsesTurnClient {
           for (const item of event.response.output) {
             const web = webSearchItem(item);
             if (web === undefined) continue;
-            await startWebSearch(web.callId, web.action, web.ok);
+            await startWebSearch(web.callId, web.action, web.input, web.ok);
             await completeWebSearch(web.callId, web.ok);
           }
         } else if (event.type === "response.failed" || event.type === "response.incomplete" || event.type === "error") {
@@ -257,7 +269,11 @@ export class OpenAiResponsesTurnClient {
       if (!completed || !completedAdmission) {
         throw new ResponsesTurnError("Responses stream ended without response.completed.");
       }
-      return { response: completed, ...completedAdmission };
+      return {
+        response: completed,
+        ...completedAdmission,
+        hostedWebCallIds: [...startedWebSearches],
+      };
     } catch (error) {
       await completeThinking(false);
       for (const callId of [...activeWebSearches]) {
@@ -288,9 +304,15 @@ export class OpenAiResponsesTurnClient {
         // appears in Telegram as if the host had accepted a real tool call.
         result = { success: false, text: "Unknown local function." };
       } else {
-        await progress(request, { type: "local_function_started", callId, name });
+        const parsedCall = parseFunctionCall(call);
+        await progress(request, {
+          type: "local_function_started",
+          callId,
+          name,
+          arguments: parsedCall.arguments,
+        });
         try {
-          result = await request.dispatcher.dispatch(parseFunctionCall(call), signal);
+          result = await request.dispatcher.dispatch(parsedCall, signal);
           assertFunctionResult(result);
         } catch {
           result = { success: false, text: "Local function failed." };
@@ -395,13 +417,20 @@ function responseOutputInput(items: readonly ResponseOutputItem[]): readonly Rec
   return items.map((item) => item as unknown as Record<string, unknown>);
 }
 
-function webSearchItem(item: ResponseOutputItem): { callId: string; action?: ResponsesWebAction; ok: boolean } | undefined {
+function webSearchItem(item: ResponseOutputItem): {
+  callId: string;
+  action?: ResponsesWebAction;
+  input?: ResponsesWebProgressInput;
+  ok: boolean;
+} | undefined {
   if (item.type !== "web_search_call" || typeof item.id !== "string") return undefined;
   const action = recordAction(item.action);
+  const input = webProgressInput(item.action);
   const status = item.status;
   return {
     callId: item.id,
     ...(action === undefined ? {} : { action }),
+    ...(input === undefined ? {} : { input }),
     ok: status !== "failed",
   };
 }
@@ -414,6 +443,53 @@ function recordAction(value: unknown): ResponsesWebAction | undefined {
   if (value === null || typeof value !== "object") return undefined;
   const type = (value as { type?: unknown }).type;
   return type === "search" || type === "open_page" || type === "find_in_page" ? type : undefined;
+}
+
+function webProgressInput(value: unknown): ResponsesWebProgressInput | undefined {
+  if (value === null || typeof value !== "object") return undefined;
+  const action = value as {
+    type?: unknown;
+    query?: unknown;
+    queries?: unknown;
+    url?: unknown;
+    pattern?: unknown;
+  };
+  if (action.type === "search") {
+    const queries = Array.isArray(action.queries)
+      ? action.queries.filter((query): query is string => typeof query === "string")
+      : [];
+    const legacy = typeof action.query === "string" ? [action.query] : [];
+    const query = boundedProgressText([...queries, ...legacy].join(" / "), 512);
+    return query === undefined ? undefined : { query };
+  }
+  if (action.type === "open_page") {
+    const url = boundedProgressText(action.url, 2_048);
+    return url === undefined ? undefined : { url };
+  }
+  if (action.type === "find_in_page") {
+    const pattern = boundedProgressText(action.pattern, 512);
+    const url = boundedProgressText(action.url, 2_048);
+    if (pattern === undefined && url === undefined) return undefined;
+    return {
+      ...(pattern === undefined ? {} : { pattern }),
+      ...(url === undefined ? {} : { url }),
+    };
+  }
+  return undefined;
+}
+
+function boundedProgressText(value: unknown, maximum: number): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.replace(/\s+/gu, " ").trim();
+  if (normalized.length === 0) return undefined;
+  return Array.from(normalized).slice(0, maximum).join("");
+}
+
+function webProgressFingerprint(
+  action: ResponsesWebAction,
+  input: ResponsesWebProgressInput | undefined,
+): string {
+  return JSON.stringify([action, input?.query, input?.url, input?.pattern]);
 }
 
 function parseFunctionCall(call: ResponseFunctionToolCall): LocalFunctionCall {

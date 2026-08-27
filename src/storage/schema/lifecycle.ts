@@ -32,6 +32,7 @@ export abstract class SchemaLifecycleMethods extends StoreCore {
   declare protected applyBackfillExhaustedMigration: () => void;
   declare protected applyBaseSchema: () => void;
   declare protected applyBotChatDreamDaysMigration: () => void;
+  declare protected applyBotDreamPublicationsMigration: () => void;
   declare protected applyBotCodexSessionsMigration: () => void;
   declare protected applyBotChatMemoryMigration: () => void;
   declare protected applyBotChatKnowledgeMigration: () => void;
@@ -149,6 +150,10 @@ export abstract class SchemaLifecycleMethods extends StoreCore {
         this.applyBotCodexSessionsMigration();
         this.db.exec("PRAGMA user_version = 23");
       }
+      if (currentVersion < 24) {
+        this.applyBotDreamPublicationsMigration();
+        this.db.exec("PRAGMA user_version = 24");
+      }
       // This is a backwards-compatible performance index, not a data-model
       // change. Reconcile it for every writable compatible open so databases
       // created by an earlier build do not make one full corpus scan per day.
@@ -167,6 +172,7 @@ export abstract class SchemaLifecycleMethods extends StoreCore {
       "daemon_status",
       "send_outbox",
       "send_throttle_state",
+      "bot_dream_publications",
       "bot_updates",
       "bot_turns",
       "bot_codex_sessions",
@@ -198,6 +204,7 @@ export abstract class SchemaLifecycleMethods extends StoreCore {
       "idx_embedding_sparse_terms_lookup",
       "idx_send_outbox_chat_status",
       "idx_send_outbox_user_status",
+      "idx_bot_dream_publications_due",
       "idx_bot_updates_status",
       "idx_bot_turns_claim",
       "idx_bot_turns_chat_status",
@@ -238,6 +245,26 @@ export abstract class SchemaLifecycleMethods extends StoreCore {
       "expires_at_ms",
     ]);
     this.assertColumns("send_throttle_state", ["chat_id", "user_key", "next_allowed_at_ms", "updated_at_ms"]);
+    this.assertColumns("bot_dream_publications", [
+      "id",
+      "dedupe_key",
+      "payload_hash",
+      "chat_id",
+      "markdown",
+      "plain_text",
+      "status",
+      "attempts",
+      "max_attempts",
+      "lease_owner",
+      "retry_not_before_ms",
+      "telegram_message_id",
+      "error",
+      "created_at_ms",
+      "updated_at_ms",
+      "sending_at_ms",
+      "sent_at_ms",
+      "completed_at_ms",
+    ]);
     this.assertColumns("bot_updates", [
       "update_id",
       "raw_json",

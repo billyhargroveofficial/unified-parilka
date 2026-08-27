@@ -1,19 +1,19 @@
 # Architecture Map
 
 Parilka is a small TypeScript runtime for one Telegram group. SQLite WAL,
-currently schema v23, is the durable correctness boundary. Process shells only
+currently schema v24, is the durable correctness boundary. Process shells only
 compose independently tested domains; the model cannot own delivery state.
 
 ## Runtime topology
 
 ```text
-Telegram Bot API -> parilka-bot -> SQLite WAL v23 <- parilka-sync <- MTProto
+Telegram Bot API -> parilka-bot -> SQLite WAL v24 <- parilka-sync <- MTProto
                          |                 |                    |
                          v                 |                    +-> 127.0.0.1:8766/mcp
        Codex subscription Responses (direct HTTP/SSE)
        gpt-5.6-luna / Fast (`priority` wire) +-> maintain + digests + Dream
           | hosted web_search in request
-          | five read-only local functions
+          | six read-only local functions
           + trusted Telegram input_image
 ```
 
@@ -52,11 +52,13 @@ the final injected path or select another model/tier.
 
 The bot request always has hosted web search. The API can then use its native
 search/open/find flow in the same server request. The UI maps only safe action
-names to Telegram; it never exposes query strings, URLs, raw tool output or
-model reasoning. Confirmed URL citations become a deduplicated clickable final
-footer.
+names and a bounded value to Telegram: query text, URL host/path or find
+pattern, without an argument-key prefix. It drops URL credentials/query/hash
+and never exposes arbitrary tool
+arguments, raw tool output or model reasoning. Confirmed URL citations become
+a deduplicated clickable final footer.
 
-The model-facing local surface is exactly five read-only tools:
+The model-facing local surface is exactly six read-only tools:
 
 | Tool | Purpose |
 | --- | --- |
@@ -65,9 +67,12 @@ The model-facing local surface is exactly five read-only tools:
 | `read_chat_slice` | bounded chronological local range |
 | `day_digest` | local day/range digest |
 | `thread_context` | bounded neighbourhood around a local message |
+| `load_chat_skill` | full instruction for one exact indexed same-chat skill |
 
 The model never supplies `chat_id` or `source_message_id`; the host injects
-them from the durable trigger and rejects history at or after it. No terminal,
+them from the durable trigger and rejects history at or after it.
+`load_chat_skill` takes a name only, and the host similarly enforces the exact
+same-chat skill and its pre-trigger source. No terminal,
 filesystem read/write/delete, Telegram API write, arbitrary MCP, plugins or
 generic host tool is exposed.
 
@@ -80,22 +85,33 @@ model-accessible working directory.
 
 Before a model call, `CausalRagContextBuilder` includes bounded trigger/reply/
 recent context, then selectively performs hybrid retrieval for history intent
-or temporal digest lookup. The default provider is loopback BGE-M3, producing
-dense and learned sparse representations; BM25, RRF and optional local rerank
-remain on the host. Retrieval has a small timeout and degrades to recent local
-context, never external network retrieval. The final packet is capped,
-labels provenance internally and treats all chat text as untrusted data.
+or temporal digest lookup. It exposes only bounded skill names/descriptions in
+that packet; a full instruction needs the explicit `load_chat_skill` call.
+The default provider is loopback BGE-M3, producing dense and learned sparse
+representations; BM25, RRF and optional local rerank remain on the host.
+Retrieval has a small timeout and degrades to recent local context, never
+external network retrieval. The final packet is capped, labels provenance
+internally and treats all chat text as untrusted data.
 
 ## Telegram presentation
 
 Once a turn is leased, typing starts before upstream HTTP connection and is
 heartbeated until final publication. Thinking, hosted web, image handling and
 accepted local read calls share a single transient progress message. It is
-edited in place under a hard per-turn snapshot budget, coalesces successful
+rendered as accumulated compact English rows, exactly one logical row per tool
+call, edited in place under a hard per-turn snapshot budget, coalesces successful
 completion with the next concrete tool status, suppresses continuation-thinking
 after tool execution begins, is given minimum dwell, and is deleted before final
 rich publication. It is excluded from corpus/digest ingestion. Publisher
 rendering normalizes Markdown/rich Bot API output and splits safely where needed.
+
+Dream is nightly tokenless maintenance. Its eight staged-overlay review tools
+are intentionally absent from the live progress bubble: a rejected day rolls
+them back. The same successful SQLite transaction that commits a Dream audit
+may queue one durable, permanent public digest. A Bot-owner worker later sends
+it unthreaded. The digest is bounded to layer counts and changed skill names or
+lesson/note titles; it never contains memory text, skill instructions, review
+inputs/outputs or raw tool payloads.
 
 ## Repository lanes
 

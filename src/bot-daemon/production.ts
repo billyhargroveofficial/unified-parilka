@@ -37,6 +37,7 @@ export function createProductionBotDaemon(options: CreateProductionBotDaemonOpti
   try {
     store = factories.createStore(config.dbPath);
     store.reconcileActiveSendsOnStartup();
+    store.reconcileDreamPublicationsOnStartup();
     api = factories.createApi(config.token, store, config);
     composition = composeBotDaemon({
       config,
@@ -56,10 +57,15 @@ export function createProductionBotDaemon(options: CreateProductionBotDaemonOpti
       config,
       store,
       logger: options.logger,
-      activeWorkerCount: () => current.workerPump.activeWorkers,
+      activeWorkerCount: () =>
+        current.workerPump.activeWorkers +
+        current.dreamPublicationWorkerPump.activeWorkers,
       close: async () => {
         if (closed !== undefined) return closed;
-        if (current.workerPump.activeWorkers > 0) {
+        if (
+          current.workerPump.activeWorkers > 0 ||
+          current.dreamPublicationWorkerPump.activeWorkers > 0
+        ) {
           throw new Error("Refusing to close SQLite while Responses bot workers remain active.");
         }
         closed = (async () => {

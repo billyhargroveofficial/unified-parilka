@@ -65,6 +65,7 @@ export {
   type ResponsesTextJsonSchema,
   type ResponsesUsage,
   type ResponsesWebAction,
+  type ResponsesWebProgressInput,
   type RunResponsesTurnRequest,
   type RunResponsesTurnResult,
 } from "./contracts.js";

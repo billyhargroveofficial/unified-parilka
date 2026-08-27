@@ -6,7 +6,7 @@ import {
   hasTemporalIntent,
   type CausalRagCache,
 } from "../src/bot/causal-rag/index.js";
-import type { StoredMessage } from "../src/store.js";
+import { MAX_CHAT_SKILLS, type StoredChatSkill, type StoredMessage } from "../src/store.js";
 
 const CHAT = "-100123";
 
@@ -66,6 +66,40 @@ test("a causal reply target and recent context are both injected before deeper r
   assert.match(result.packet, /〔C2〕/);
 });
 
+test("skill index excludes future/null/cross-chat rows before taking its bounded visible slice", async () => {
+  let requestedLimit: number | undefined;
+  const builder = new CausalRagContextBuilder({
+    cache: cache(),
+    skillIndex: {
+      listChatSkills(_chatId, limit) {
+        requestedLimit = limit;
+        return [
+          skill("future", "must not appear", 12),
+          skill("unattributed", "must not appear", undefined),
+          { ...skill("other", "must not appear", 1), chatId: "-100other" },
+          ...Array.from({ length: 8 }, (_value, index) =>
+            skill(`visible-${String(index + 1)}`, `description ${String(index + 1)}`, index + 1)),
+          skill("overflow", "must stay outside the eight-entry index", 1),
+        ];
+      },
+    },
+  });
+
+  const result = await builder.build({
+    chatId: CHAT,
+    triggerMessageId: 10,
+    triggerText: "как дела?",
+    context: [],
+  });
+
+  assert.equal(requestedLimit, MAX_CHAT_SKILLS);
+  assert.match(result.packet, /Индекс сохранённых навыков чата/u);
+  assert.match(result.packet, /visible-1: description 1/u);
+  assert.match(result.packet, /visible-8: description 8/u);
+  assert.doesNotMatch(result.packet, /future|unattributed|other|overflow/u);
+  assert.doesNotMatch(result.packet, /instructions/u);
+});
+
 function cache(overrides: Partial<CausalRagCache> = {}): CausalRagCache {
   return {
     async search() {
@@ -86,5 +120,22 @@ function message(messageId: number, text: string, senderName: string): StoredMes
     senderName,
     date: "2026-08-27T08:00:00.000Z",
     text,
+  };
+}
+
+function skill(
+  name: string,
+  description: string,
+  sourceMessageId: number | undefined,
+): StoredChatSkill {
+  return {
+    chatId: CHAT,
+    key: name,
+    name,
+    description,
+    instructions: "instructions must not be injected",
+    ...(sourceMessageId === undefined ? {} : { sourceMessageId }),
+    createdAtMs: 1,
+    updatedAtMs: 1,
   };
 }

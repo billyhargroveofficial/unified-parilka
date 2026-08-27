@@ -49,7 +49,7 @@ test("Responses core sends the hard-pinned hosted web contract and exposes citat
 
   assert.deepEqual(transport.requests[0], {
     model: "gpt-5.6-luna", service_tier: "priority", reasoning: { effort: "low" },
-    store: false, stream: true, prompt_cache_key: "parilka:responses:v1", instructions: "Только безопасные инструменты.",
+    store: false, stream: true, prompt_cache_key: "parilka:responses:v2", instructions: "Только безопасные инструменты.",
     input: [{ role: "user", content: [{ type: "input_text", text: "Проверь Node.js" }] }],
     tools: [{ type: "web_search", search_context_size: "medium" }],
     include: ["reasoning.encrypted_content", "web_search_call.action.sources"], max_tool_calls: 8, parallel_tool_calls: false,
@@ -57,7 +57,7 @@ test("Responses core sends the hard-pinned hosted web contract and exposes citat
   assert.deepEqual(result, {
     responseId: "resp-final", model: "gpt-5.6-luna", text: "Проверил источник [1]",
     annotations: [{ startIndex: 18, endIndex: 21, title: "Node.js", url: "https://nodejs.org" }],
-    functionCalls: 0, completed: true, finishStatus: "completed",
+    functionCalls: 0, hostedWebCalls: 1, completed: true, finishStatus: "completed",
     usage: { inputTokens: 10, cachedInputTokens: 3, outputTokens: 7, reasoningOutputTokens: 2, totalTokens: 17 },
     serviceTier: "priority",
   });
@@ -109,8 +109,8 @@ test("Responses core keeps exact local schemas and continues one turn sequential
   assert.equal("previous_response_id" in transport.requests[0], false);
   assert.equal("previous_response_id" in transport.requests[1], false);
   assert.equal(transport.requests[1].instructions, "Повтори в continuation.");
-  assert.equal(transport.requests[0].prompt_cache_key, "parilka:responses:v1");
-  assert.equal(transport.requests[1].prompt_cache_key, "parilka:responses:v1");
+  assert.equal(transport.requests[0].prompt_cache_key, "parilka:responses:v2");
+  assert.equal(transport.requests[1].prompt_cache_key, "parilka:responses:v2");
   assert.deepEqual(calls, [{ callId: "call-1", name: "lookup", arguments: { query: "баня" } }]);
   assert.deepEqual(transport.requests[1].input, [
     { role: "user", content: [{ type: "input_text", text: "Найди в истории" }] },
@@ -121,6 +121,7 @@ test("Responses core keeps exact local schemas and continues one turn sequential
   assert.equal(result.model, "gpt-5.6-luna");
   assert.equal(result.serviceTier, "priority");
   assert.equal(result.functionCalls, 1);
+  assert.equal(result.hostedWebCalls, 0);
   assert.deepEqual(progress, [
     "thinking_started", "thinking_completed", "local_function_started", "local_function_completed",
     "thinking_started", "thinking_completed",
@@ -283,10 +284,14 @@ test("Responses core admits only transport-normalized priority Fast tier", async
 
 test("Responses core projects terminal hosted web calls when granular stream events are absent", async () => {
   const transport = new FakeResponses(events(completed(response("resp-web-final", "Готово", [], [{
-    type: "web_search_call", id: "web-terminal", action: { type: "find_in_page" }, status: "completed",
+    type: "web_search_call", id: "web-terminal", action: {
+      type: "find_in_page",
+      pattern: "installation steps",
+      url: "https://example.com/guide?token=private",
+    }, status: "completed",
   }]))));
-  const progress: Array<{ type: string; callId: string; action?: string; ok?: boolean }> = [];
-  await new OpenAiResponsesTurnClient(transport).run({
+  const progress: Array<{ type: string; callId: string; action?: string; input?: unknown; ok?: boolean }> = [];
+  const result = await new OpenAiResponsesTurnClient(transport).run({
     text: "Проверь", instructions: "x", effort: "low", localFunctions: [],
     dispatcher: { async dispatch() { throw new Error("not called"); } },
     progress: { onProgress(event) { progress.push(event); } },
@@ -294,9 +299,18 @@ test("Responses core projects terminal hosted web calls when granular stream eve
   assert.equal(progress[0]?.type, "thinking_started");
   assert.deepEqual(progress.slice(1), [
     { type: "thinking_completed", callId: progress[1]!.callId, ok: true },
-    { type: "hosted_web_started", callId: "web-terminal", action: "find_in_page" },
+    {
+      type: "hosted_web_started",
+      callId: "web-terminal",
+      action: "find_in_page",
+      input: {
+        pattern: "installation steps",
+        url: "https://example.com/guide?token=private",
+      },
+    },
     { type: "hosted_web_completed", callId: "web-terminal", ok: true },
   ]);
+  assert.equal(result.hostedWebCalls, 1);
 });
 
 test("late action metadata re-labels a granularly completed progress item", async () => {
@@ -351,7 +365,7 @@ test("Responses core never presents an unknown function and marks rejected host 
   assert.deepEqual(
     progress.filter((event) => event.type.startsWith("local_function")),
     [
-      { type: "local_function_started", callId: "known-1", name: "lookup" },
+      { type: "local_function_started", callId: "known-1", name: "lookup", arguments: {} },
       { type: "local_function_completed", callId: "known-1", name: "lookup", ok: false },
     ],
   );

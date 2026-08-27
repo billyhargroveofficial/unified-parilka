@@ -1,6 +1,7 @@
 import { CanonicalBotReadCache } from "../bot/read-cache.js";
 import { BotReadTools } from "../bot/read-tools.js";
 import { CausalRagContextBuilder } from "../bot/causal-rag/index.js";
+import { DreamPublicationWorker } from "../bot/dream-publication-worker.js";
 import { BotApiLongPoller, BotApiRuntime, BotUpdateProcessor, BotWorkerPump, botRuntimeOptions, createTelegramLongPollingApi, createToolProgressTelegramBotApiPort } from "../bot/runtime.js";
 import { TurnCoordinator } from "../bot/turn-coordinator.js";
 import { ChatTypingLeaseManager } from "../bot/typing.js";
@@ -20,9 +21,16 @@ export function composeBotDaemon(options: ComposeBotDaemonOptions): BotDaemonCom
     botSenderId: config.botId,
     rerankMaxCandidates: config.rag.rerankMaxCandidates,
   });
-  const readTools = new BotReadTools({ chatId: config.allowedChatId, cache, botSenderId: config.botId, timeZone: "Europe/Moscow" });
+  const readTools = new BotReadTools({
+    chatId: config.allowedChatId,
+    cache,
+    skillStore: options.store,
+    botSenderId: config.botId,
+    timeZone: "Europe/Moscow",
+  });
   const causalRag = new CausalRagContextBuilder({
     cache,
+    skillIndex: options.store,
     historyTimeoutMs: config.rag.automaticTimeoutMs,
   });
   const agent = options.createAgent({
@@ -53,6 +61,16 @@ export function composeBotDaemon(options: ComposeBotDaemonOptions): BotDaemonCom
     logger: options.logger,
   }));
   const workerPump = new BotWorkerPump({ workers, logger: options.logger });
+  const dreamPublicationWorkerPump = new BotWorkerPump({
+    workers: [new DreamPublicationWorker({
+      store: options.store,
+      telegram: options.api,
+      workerId: `${workerIdPrefix}:dream:1`,
+      allowedChatId: config.allowedChatId,
+      logger: options.logger,
+    })],
+    logger: options.logger,
+  });
   const processor = new BotUpdateProcessor({
     store: options.store,
     coordinator,
@@ -77,12 +95,12 @@ export function composeBotDaemon(options: ComposeBotDaemonOptions): BotDaemonCom
     }),
     logger: options.logger,
   });
-  const runtime = new BotApiRuntime({ poller, workers: workerPump, typingLeases, shutdownTimeoutMs: config.shutdownTimeoutMs, logger: options.logger });
-  return { runtime, poller, workerPump, workers, processor, coordinator, cache, readTools, causalRag, agent, close: () => agent.close() };
+  const runtime = new BotApiRuntime({ poller, workers: workerPump, maintenanceWorkers: dreamPublicationWorkerPump, typingLeases, shutdownTimeoutMs: config.shutdownTimeoutMs, logger: options.logger });
+  return { runtime, poller, workerPump, dreamPublicationWorkerPump, workers, processor, coordinator, cache, readTools, causalRag, agent, close: () => agent.close() };
 }
 
 function requireWorkerIdPrefix(value: string): string {
   const normalized = value.trim();
-  if (!/^[A-Za-z0-9_.:-]{1,128}$/u.test(normalized)) throw new TypeError("workerIdPrefix must contain 1-128 machine-safe characters.");
+  if (!/^[A-Za-z0-9_.:-]{1,120}$/u.test(normalized)) throw new TypeError("workerIdPrefix must contain 1-120 machine-safe characters.");
   return normalized;
 }

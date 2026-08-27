@@ -40,6 +40,7 @@ export interface BotDaemonComposition {
   readonly runtime: BotApiRuntime;
   readonly poller: BotApiLongPoller;
   readonly workerPump: BotWorkerPump;
+  readonly dreamPublicationWorkerPump: BotWorkerPump;
   readonly workers: readonly BotTurnWorker[];
   readonly processor: BotUpdateProcessor;
   readonly coordinator: TurnCoordinator;

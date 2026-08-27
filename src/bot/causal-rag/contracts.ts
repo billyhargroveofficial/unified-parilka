@@ -3,7 +3,7 @@ import type {
   CachedDigestResult,
   DigestCacheQuery,
 } from "../read-tools.js";
-import type { StoredMessage } from "../../store.js";
+import type { StoredChatSkill, StoredMessage } from "../../store.js";
 
 /**
  * Deliberately narrow read boundary for the pre-turn packet.  It is
@@ -19,6 +19,14 @@ export interface CausalRagCache {
     beforeId: number;
   }): Promise<CachedChatSearchResult>;
   getDigests(params: DigestCacheQuery): CachedDigestResult;
+}
+
+/**
+ * Bounded progressive-disclosure index for chat skills. The index is not a
+ * privileged prompt: its contents are injected only as untrusted chat data.
+ */
+export interface CausalSkillIndexPort {
+  listChatSkills(chatId: string, limit?: number): readonly StoredChatSkill[];
 }
 
 export interface CausalRagInput {

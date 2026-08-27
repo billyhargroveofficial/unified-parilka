@@ -24,10 +24,13 @@ inside chat messages. If the loopback BGE-M3 service is slow/unavailable, the
 packet degrades to bounded recent local context; it never silently sends chat
 history to a web search service.
 
-The five model functions (`rag_bm25_search`, `keyword_search`,
-`read_chat_slice`, `day_digest`, `thread_context`) are a supplemental local
-read surface. They do not contain `chat_id`/trigger identity in their schemas;
-the host injects and verifies both.
+The six model functions (`rag_bm25_search`, `keyword_search`,
+`read_chat_slice`, `day_digest`, `thread_context`, `load_chat_skill`) are a
+supplemental local read surface. They do not contain `chat_id`/trigger identity
+in their schemas; the host injects and verifies both. The last tool takes an
+exact skill name and reveals its full instruction only for that same chat and
+only when the skill source precedes the trigger. The causal packet itself
+contains only bounded skill metadata for progressive disclosure.
 
 ## Dream consolidation
 
@@ -38,6 +41,14 @@ review functions against a staged overlay; those tools are never exposed to
 the live Telegram model. Dream and summary calls use the direct Responses
 maintenance runner, hard-pinned to Luna/fast and fail closed rather than
 falling back to a different provider.
+
+Dream maintenance has no Bot API token and never emits its internal review
+calls as Telegram progress. In the successful commit transaction, the host may
+enqueue one permanent public Dream digest for that chat/day. A separate
+Bot-owner delivery worker, which never occupies a user-turn slot, sends it
+later. It is a bounded audit-derived changelog of layer counts and
+changed skill names or lesson/note titles only; it contains no memory text,
+skill instruction, review content or tool payload.
 
 Historical Codex runner wording is superseded. Old records stay in
 `loop-develop/history/`; they are not current runtime behavior.

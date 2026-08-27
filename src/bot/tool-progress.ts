@@ -10,6 +10,8 @@
 export interface ToolProgressEvent {
   readonly toolName: string;
   readonly callId: string;
+  /** Stable host-owned identity used to select the safe input projection. */
+  readonly toolId?: string;
   /** Raw model input is projected through an allowlist before presentation. */
   readonly input?: Readonly<Record<string, unknown>>;
 }
@@ -102,11 +104,14 @@ export interface ToolProgressPublisherOptions {
 interface ToolCallStatus {
   readonly kind: "thinking" | "tool";
   readonly toolName: string;
+  readonly toolId?: string;
   readonly state: "running" | "ok" | "error";
   readonly inputPreview?: string;
 }
 
 const DEFAULT_MAX_TEXT_LENGTH = 3_500;
+/** Each accumulated tool occupies exactly one compact logical row. */
+const MAX_PROGRESS_LINE_LENGTH = 48;
 export const DEFAULT_PROGRESS_MIN_VISIBLE_MS = 1_000;
 const MAX_PROGRESS_MIN_VISIBLE_MS = 1_200;
 /**
@@ -117,8 +122,6 @@ const MAX_PROGRESS_MIN_VISIBLE_MS = 1_200;
 export const MAX_PROGRESS_SNAPSHOTS_PER_TURN = 10;
 /** A sent but unfenced UI bubble gets one short independent cleanup attempt. */
 const UNFENCED_PROGRESS_CLEANUP_TIMEOUT_MS = 5_000;
-const MAX_QUERY_PREVIEW_LINES = 3;
-const MAX_QUERY_PREVIEW_LINE_CHARS = 96;
 
 /**
  * Publishes a single Telegram progress message during model steps and read-tool
@@ -254,8 +257,9 @@ export class ToolProgressPublisher implements ToolProgressPort {
     this.#pending.set(event.callId, {
       kind: "tool",
       toolName: event.toolName,
+      ...(event.toolId === undefined ? {} : { toolId: event.toolId }),
       state: "running",
-      inputPreview: toolInputPreview(event.toolName, event.input),
+      inputPreview: toolInputPreview(event.toolId ?? event.toolName, event.input),
     });
     this.#dispatch();
   }
@@ -266,9 +270,15 @@ export class ToolProgressPublisher implements ToolProgressPort {
     this.#pending.set(event.callId, {
       kind: previous?.kind ?? "tool",
       toolName: event.toolName,
+      ...(previous?.toolId === undefined && event.toolId === undefined
+        ? {}
+        : { toolId: event.toolId ?? previous?.toolId }),
       state: ok ? "ok" : "error",
       inputPreview:
-        previous?.inputPreview ?? toolInputPreview(event.toolName, event.input),
+        previous?.inputPreview ?? toolInputPreview(
+          event.toolId ?? previous?.toolId ?? event.toolName,
+          event.input,
+        ),
     });
     // Successful completion is visible in the next tool-start snapshot. This
     // bounds a five-tool turn to one send plus five edits, leaving Telegram
@@ -529,24 +539,26 @@ export function renderProgressText(
   pending: ReadonlyMap<string, ToolCallStatus>,
   maxLength: number,
 ): string {
+  const capacity = Math.max(1, Math.floor(maxLength));
   const lines: string[] = [];
-  for (const [, status] of pending) {
+  let used = 0;
+  for (const status of pending.values()) {
+    const separatorLength = lines.length === 0 ? 0 : 1;
+    const remaining = capacity - used - separatorLength;
+    if (remaining <= 0) break;
     const icon =
       status.kind === "thinking" && status.state === "running"
         ? "🧠"
         : status.state === "running" ? "⏳" : status.state === "ok" ? "✓" : "✗";
-    lines.push(`${icon} ${status.toolName}`);
-    if (status.inputPreview) {
-      lines.push(
-        ...status.inputPreview.split("\n").map((line) => `  ${line}`),
-      );
-    }
+    const preview = status.inputPreview ? ` · ${status.inputPreview}` : "";
+    const line = truncateSingleLine(
+      `${icon} ${status.toolName}${preview}`,
+      Math.min(MAX_PROGRESS_LINE_LENGTH, remaining),
+    );
+    lines.push(line);
+    used += separatorLength + Array.from(line).length;
   }
-  const text = lines.join("\n");
-  if (text.length <= maxLength) {
-    return text;
-  }
-  return text.slice(0, Math.max(1, maxLength - 1)) + "…";
+  return lines.join("\n");
 }
 
 /**
@@ -562,76 +574,82 @@ function toolInputPreview(
   }
   const query = textField(input, "query");
   if (toolName === "rag_bm25_search" && query) {
-    return `rag: ${queryPreviewText(query)}`;
+    return queryPreviewText(query);
   }
   if (toolName === "keyword_search" && query) {
-    return queryPreview(query);
+    return queryPreviewText(query);
   }
   if (toolName === "day_digest") {
     const dayFrom = textField(input, "day_from");
     const dayTo = textField(input, "day_to");
     if (dayFrom) {
-      return `период: ${dayFrom}${dayTo ? ` — ${dayTo}` : ""}`;
+      return `${dayFrom}${dayTo ? `..${dayTo}` : ""}`;
     }
   }
   if (toolName === "read_chat_slice") {
     if (textField(input, "cursor")) {
-      return "срез: продолжение по курсору";
+      return "next";
     }
     if (input.mode === "recent") {
       const count = integerField(input, "count");
       if (count !== undefined) {
-        return `срез: последние ${count}`;
+        return String(count);
       }
-      return "срез: последние сообщения";
+      return "recent";
     }
     if (input.mode === "period") {
       const dayFrom = textField(input, "day_from");
       const dayTo = textField(input, "day_to");
       if (dayFrom) {
-        return `срез: ${dayFrom}${dayTo ? ` — ${dayTo}` : ""}`;
+        return `${dayFrom}${dayTo ? `..${dayTo}` : ""}`;
       }
-      return "срез: период";
+      return "period";
     }
   }
   if (toolName === "thread_context") {
     const messageId = integerField(input, "message_id");
     if (messageId !== undefined) {
-      return `сообщение: #${messageId}`;
+      return `#${messageId}`;
     }
+  }
+  if (toolName === "load_chat_skill") {
+    const name = textField(input, "name");
+    if (name) {
+      return queryPreviewText(name);
+    }
+  }
+  if (toolName === "hosted_web") {
+    if (query) return queryPreviewText(query);
+    const pattern = textField(input, "pattern");
+    if (pattern) return queryPreviewText(pattern);
+    const url = textField(input, "url");
+    if (url) return compactUrl(url);
   }
   return undefined;
 }
 
-function queryPreview(query: string): string {
-  return `запрос: ${queryPreviewText(query)}`;
-}
-
 function queryPreviewText(query: string): string {
   const normalized = query.replace(/\s+/gu, " ").trim();
-  if (normalized.length === 0) {
-    return "";
+  return normalized;
+}
+
+function compactUrl(value: string): string {
+  try {
+    const url = new URL(value);
+    const path = url.pathname === "/" ? "" : url.pathname;
+    return `${url.hostname}${path}`;
+  } catch {
+    return queryPreviewText(value);
   }
+}
+
+function truncateSingleLine(value: string, maxLength: number): string {
+  const normalized = value.replace(/\s+/gu, " ").trim();
   const characters = Array.from(normalized);
-  const capacity =
-    MAX_QUERY_PREVIEW_LINES * MAX_QUERY_PREVIEW_LINE_CHARS;
-  const truncated = characters.length > capacity;
-  const visible = truncated
-    ? characters.slice(0, capacity - 1)
-    : characters;
-  const rows: string[] = [];
-  for (let index = 0; index < visible.length; index += MAX_QUERY_PREVIEW_LINE_CHARS) {
-    rows.push(
-      visible.slice(index, index + MAX_QUERY_PREVIEW_LINE_CHARS).join(""),
-    );
-  }
-  if (truncated) {
-    const last = rows.length - 1;
-    rows[last] = `${rows[last] ?? ""}…`;
-  }
-  return rows
-    .map((row, index) => index === 0 ? row : `        ${row}`)
-    .join("\n");
+  const capacity = Math.max(1, Math.floor(maxLength));
+  if (characters.length <= capacity) return normalized;
+  if (capacity === 1) return "…";
+  return `${characters.slice(0, capacity - 1).join("")}…`;
 }
 
 function textField(

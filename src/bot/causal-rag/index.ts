@@ -6,6 +6,7 @@ export {
 export { hasHistoryIntent, hasTemporalIntent } from "./policy.js";
 export type {
   CausalRagCache,
+  CausalSkillIndexPort,
   CausalRagInput,
   CausalRagPacket,
   CausalRagSource,

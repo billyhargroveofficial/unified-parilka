@@ -17,11 +17,11 @@ causal history limits and tool authority in the host.
 ## Decision
 
 ```text
-Telegram Bot API -> parilka-bot -> SQLite WAL v23 <- parilka-sync
+Telegram Bot API -> parilka-bot -> SQLite WAL v24 <- parilka-sync
                          |
                          +-> ChatGPT Codex subscription Responses, direct HTTP/SSE
                              gpt-5.6-luna + Fast (`priority` on wire)
-                             hosted web_search + five local read tools
+                             hosted web_search + six local read tools
 ```
 
 1. `parilka-sync` remains the sole MTProto/session and loopback-MCP owner.
@@ -40,6 +40,8 @@ Telegram Bot API -> parilka-bot -> SQLite WAL v23 <- parilka-sync
    durable Codex thread binding.
 6. Day/week digests and Dream use the same direct Responses maintenance
    boundary, isolated from the Bot API token.
+7. A completed nightly Dream day atomically queues at most one bounded public
+   digest; only the Bot owner can send it after commit.
 
 ## Safety and delivery invariants
 
@@ -58,10 +60,12 @@ After the send fence a timeout or ambiguous acknowledgement is `lost_ack`, not
 an automatic resend. One token has one poller; a lifetime lock and controlled
 cutover enforce this independently of model availability.
 
-The model has hosted web capability, trusted image input and exactly five
+The model has hosted web capability, trusted image input and exactly six
 read-only local functions: `rag_bm25_search`, `keyword_search`,
-`read_chat_slice`, `day_digest`, `thread_context`. The host supplies chat and
-causal trigger identity; model arguments cannot read at/after the trigger.
+`read_chat_slice`, `day_digest`, `thread_context`, `load_chat_skill`. The host
+supplies chat and causal trigger identity; model arguments cannot read at/after
+the trigger. The skill loader accepts only a name and resolves an exact
+same-chat skill with a source before the trigger.
 There is no terminal, arbitrary filesystem, Telegram write, plugin/MCP or
 generic host-tool surface.
 
@@ -74,6 +78,9 @@ generic host-tool surface.
   tier or credential value.
 - Loopback BGE-M3 and SQLite stay host-side, so chat text does not need an
   external retrieval gateway.
+- Dream review-tool activity is never announced as live progress because it is
+  staged. A committed one-per-day digest reports only bounded changed
+  names/titles/counts and is delivered later by the Bot owner.
 - The old Hermes/Codex material stays historical and rollback context only.
   `Conflicts=hermes-gateway-parilka.service` remains a one-owner guard, not a
   dependency or fallback.

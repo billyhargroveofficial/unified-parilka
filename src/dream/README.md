@@ -15,11 +15,17 @@ use exactly eight staged-overlay functions:
 
 The live bot never gets these write/delete functions. Model work writes only an
 in-memory overlay. A successful complete day atomically commits staged
-knowledge, semantic memory/watermark and the completed day row; timeout,
-invalid output, rejected function or failed call discards the stage. Empty days
-complete without a model call. There is no provider/model fallback.
+knowledge, semantic memory/watermark, the completed day row and its exact audit;
+the same transaction may enqueue one bounded permanent public Dream digest.
+Maintenance remains tokenless and cannot deliver it: the Bot owner later sends
+the queued item unthreaded. The digest is audit-derived and shows only changed
+layer counts plus bounded skill names or lesson/note titles; it never shows
+memory text, skill instructions, review prompts/results or tool payloads.
+Timeout, invalid output, rejected function or failed call discards both the
+stage and any would-be digest. Empty days complete without a model call. There
+is no provider/model fallback.
 
-Dream plans seven completed Moscow days on first encounter, then fills missing
+Dream runs nightly, plans seven completed Moscow days on first encounter, then fills missing
 days and retries failed/running days oldest-first. Inputs are bounded projected
 windows, not full-chat scans. Logs contain safe event metadata and error codes,
 never prompts, memory contents, model output, tool payloads or credentials.

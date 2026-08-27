@@ -19,22 +19,42 @@ function progressLog(): { port: ToolProgressPort; calls: string[] } {
   };
 }
 
-test("maps a hosted web search to one safe lifecycle without query or URL", () => {
+test("maps a hosted web search and its bounded selector to one lifecycle", () => {
   const { port, calls } = progressLog();
-  const progress = new ResponsesTelegramProgress(port);
+  const started: Array<Parameters<ToolProgressPort["onToolStarted"]>[0]> = [];
+  const progress = new ResponsesTelegramProgress({
+    ...port,
+    onToolStarted(event) {
+      started.push(event);
+      return port.onToolStarted(event);
+    },
+  });
 
   progress.startThinking("response-1");
-  progress.startWeb({ itemId: "ws-1", action: "search" });
-  progress.startWeb({ itemId: "ws-1", action: "search" });
+  progress.startWeb({
+    itemId: "ws-1",
+    action: "search",
+    input: { query: "Elden Ring VR mod" },
+  });
+  progress.startWeb({
+    itemId: "ws-1",
+    action: "search",
+    input: { query: "Elden Ring VR mod" },
+  });
   progress.completeWeb("ws-1");
 
   assert.deepEqual(calls, [
     "thinking:start:responses:thinking:response-1",
     "thinking:done:true:responses:thinking:response-1",
-    "tool:start:responses:web:ws-1:веб-поиск",
-    "tool:done:true:responses:web:ws-1:веб-поиск",
+    "tool:start:responses:web:ws-1:web_search",
+    "tool:done:true:responses:web:ws-1:web_search",
   ]);
-  assert.doesNotMatch(calls.join("\n"), /query|https?:\/\//u);
+  assert.deepEqual(started, [{
+    callId: "responses:web:ws-1",
+    toolName: "web_search",
+    toolId: "hosted_web",
+    input: { query: "Elden Ring VR mod" },
+  }]);
 });
 
 test("does not render repeated thinking lifecycles after tool execution begins", () => {
@@ -52,12 +72,12 @@ test("does not render repeated thinking lifecycles after tool execution begins",
   assert.deepEqual(calls, [
     "thinking:start:responses:thinking:initial",
     "thinking:done:true:responses:thinking:initial",
-    "tool:start:responses:web:ws-1:веб-поиск",
-    "tool:done:true:responses:web:ws-1:веб-поиск",
+    "tool:start:responses:web:ws-1:web_search",
+    "tool:done:true:responses:web:ws-1:web_search",
   ]);
 });
 
-test("maps hosted open and find calls to bounded Russian labels", () => {
+test("maps hosted open and find calls to canonical English labels", () => {
   const { port, calls } = progressLog();
   const progress = new ResponsesTelegramProgress(port);
 
@@ -67,10 +87,10 @@ test("maps hosted open and find calls to bounded Russian labels", () => {
   progress.completeWeb("find-1", false);
 
   assert.deepEqual(calls, [
-    "tool:start:responses:web:open-1:открываю страницу",
-    "tool:start:responses:web:find-1:ищу на странице",
-    "tool:done:true:responses:web:open-1:открываю страницу",
-    "tool:done:false:responses:web:find-1:ищу на странице",
+    "tool:start:responses:web:open-1:web_fetch",
+    "tool:start:responses:web:find-1:find_in_page",
+    "tool:done:true:responses:web:open-1:web_fetch",
+    "tool:done:false:responses:web:find-1:find_in_page",
   ]);
 });
 
@@ -83,9 +103,9 @@ test("updates one hosted call when the stream resolves search into page open", (
   progress.completeWeb("web-1");
 
   assert.deepEqual(calls, [
-    "tool:start:responses:web:web-1:веб-поиск",
-    "tool:start:responses:web:web-1:открываю страницу",
-    "tool:done:true:responses:web:web-1:открываю страницу",
+    "tool:start:responses:web:web-1:web_search",
+    "tool:start:responses:web:web-1:web_fetch",
+    "tool:done:true:responses:web:web-1:web_fetch",
   ]);
 });
 
@@ -107,13 +127,40 @@ test("starts local progress only after an accepted validated dispatch", () => {
     callId: "local-1",
     toolName: "keyword_search",
     validation: "accepted",
+    input: { query: "баня", match: "all", limit: 10 },
   });
   progress.completeValidatedLocalTool("local-1", true);
 
   assert.deepEqual(calls, [
-    "tool:start:responses:function:local-1:ищу сообщения",
-    "tool:done:true:responses:function:local-1:ищу сообщения",
+    "tool:start:responses:function:local-1:keyword_search",
+    "tool:done:true:responses:function:local-1:keyword_search",
   ]);
+});
+
+test("renders a validated skill read as its own canonical tool lifecycle", () => {
+  const { port, calls } = progressLog();
+  const started: Array<Parameters<ToolProgressPort["onToolStarted"]>[0]> = [];
+  const progress = new ResponsesTelegramProgress({
+    ...port,
+    onToolStarted(event) {
+      started.push(event);
+      return port.onToolStarted(event);
+    },
+  });
+
+  progress.startValidatedLocalTool({
+    callId: "skill-1",
+    toolName: "load_chat_skill",
+    validation: "accepted",
+    input: { name: "reply-style" },
+  });
+  progress.completeValidatedLocalTool("skill-1", true);
+
+  assert.deepEqual(calls, [
+    "tool:start:responses:function:skill-1:load_chat_skill",
+    "tool:done:true:responses:function:skill-1:load_chat_skill",
+  ]);
+  assert.deepEqual(started[0]?.input, { name: "reply-style" });
 });
 
 test("maps image input, inspection, and generation without image data", () => {
@@ -128,12 +175,12 @@ test("maps image input, inspection, and generation without image data", () => {
   progress.completeImage("gen-1", false);
 
   assert.deepEqual(calls, [
-    "tool:start:responses:image:input-1:подготавливаю изображение",
-    "tool:done:true:responses:image:input-1:подготавливаю изображение",
-    "tool:start:responses:image:view-1:просматриваю изображение",
-    "tool:done:true:responses:image:view-1:просматриваю изображение",
-    "tool:start:responses:image:gen-1:генерирую изображение",
-    "tool:done:false:responses:image:gen-1:генерирую изображение",
+    "tool:start:responses:image:input-1:input_image",
+    "tool:done:true:responses:image:input-1:input_image",
+    "tool:start:responses:image:view-1:view_image",
+    "tool:done:true:responses:image:view-1:view_image",
+    "tool:start:responses:image:gen-1:image_generation",
+    "tool:done:false:responses:image:gen-1:image_generation",
   ]);
   assert.doesNotMatch(calls.join("\n"), /base64|file_id|image_url/u);
 });
@@ -155,9 +202,9 @@ test("finishes outstanding work exactly once on terminal failure", () => {
   assert.deepEqual(calls, [
     "thinking:start:responses:thinking:response-2",
     "thinking:done:true:responses:thinking:response-2",
-    "tool:start:responses:web:ws-2:веб-поиск",
-    "tool:start:responses:function:local-2:читаю ветку",
-    "tool:done:false:responses:web:ws-2:веб-поиск",
-    "tool:done:false:responses:function:local-2:читаю ветку",
+    "tool:start:responses:web:ws-2:web_search",
+    "tool:start:responses:function:local-2:thread_context",
+    "tool:done:false:responses:web:ws-2:web_search",
+    "tool:done:false:responses:function:local-2:thread_context",
   ]);
 });

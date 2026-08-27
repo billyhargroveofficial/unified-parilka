@@ -13,6 +13,13 @@ test("Responses composition is inert until the poller starts", async (t) => {
   const fixture = botFixture(t);
   const store = new MessageStore(fixture.config.dbPath);
   t.after(() => store.close());
+  store.upsertChatSkill({
+    chatId: fixture.config.allowedChatId,
+    name: "Research",
+    description: "Use primary sources.",
+    instructions: "Search then cite primary sources.",
+    sourceMessageId: 5,
+  });
   let apiCalls = 0;
   let agentCalls = 0;
   const daemon = composeBotDaemon({
@@ -25,6 +32,63 @@ test("Responses composition is inert until the poller starts", async (t) => {
   assert.equal(daemon.poller.running, false);
   assert.equal(apiCalls, 0);
   assert.equal(agentCalls, 0);
+  const causal = await daemon.causalRag.build({
+    chatId: fixture.config.allowedChatId,
+    triggerMessageId: 6,
+    triggerText: "как дела?",
+    context: [],
+  });
+  assert.match(causal.packet, /Research: Use primary sources\./u);
+  const skill = await daemon.readTools.callTool(
+    "load_chat_skill",
+    { name: "Research" },
+    { sourceMessageId: 6 },
+  );
+  assert.equal(skill.ok, true);
+  if (skill.ok) {
+    assert.equal(skill.result.instructions, "Search then cite primary sources.");
+  }
+  await daemon.close();
+});
+
+test("composed bot owner drains one queued Dream digest unthreaded", async (t) => {
+  const fixture = botFixture(t);
+  const store = new MessageStore(fixture.config.dbPath);
+  t.after(() => store.close());
+  store.enqueueDreamPublication({
+    id: "dream-e2e",
+    dedupeKey: "dream-e2e/2026-08-27",
+    payloadHash: "a".repeat(64),
+    chatId: fixture.config.allowedChatId,
+    markdown: "🌙 Dream digest · 2026-08-27\nSkills: +Research",
+    plainText: "🌙 Dream digest · 2026-08-27\nSkills: +Research",
+    nowMs: 1_000,
+  });
+  const sends: Array<{ chatId: string; text: string; options: unknown }> = [];
+  const api = fakeApi(() => undefined);
+  api.sendMessage = async (chatId, text, options) => {
+    sends.push({ chatId, text, options });
+    return { message_id: 901 };
+  };
+  const daemon = composeBotDaemon({
+    config: fixture.config,
+    store,
+    api,
+    createAgent: () => fakeAgent(() => assert.fail("no user turn expected")),
+  });
+  daemon.dreamPublicationWorkerPump.start();
+  for (let index = 0; index < 20; index += 1) {
+    if (store.getDreamPublication("dream-e2e")?.status === "sent") break;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  await daemon.dreamPublicationWorkerPump.stop(1_000);
+
+  assert.deepEqual(sends, [{
+    chatId: fixture.config.allowedChatId,
+    text: "🌙 Dream digest · 2026-08-27\nSkills: +Research",
+    options: undefined,
+  }]);
+  assert.equal(store.getDreamPublication("dream-e2e")?.telegramMessageId, 901);
   await daemon.close();
 });
 
@@ -57,6 +121,38 @@ test("production factory validates before wiring and accepts offline Responses f
   await daemon.close();
   await daemon.close();
   assert.equal(apiCloses, 1);
+});
+
+test("production startup fences an interrupted Dream send as lost_ack", async (t) => {
+  const fixture = botFixture(t);
+  const seed = new MessageStore(fixture.config.dbPath);
+  seed.enqueueDreamPublication({
+    id: "dream-restart",
+    dedupeKey: "dream-restart/2026-08-27",
+    payloadHash: "b".repeat(64),
+    chatId: fixture.config.allowedChatId,
+    markdown: "Dream restart fence",
+    plainText: "Dream restart fence",
+    nowMs: 1_000,
+  });
+  assert.ok(seed.claimNextDreamPublication({
+    chatId: fixture.config.allowedChatId,
+    workerId: "seed:1",
+    nowMs: 1_001,
+  }));
+  seed.close();
+
+  const daemon = createProductionBotDaemon({
+    env: fixture.env,
+    factories: {
+      preflight: () => undefined,
+      createApi: () => fakeApi(() => assert.fail("startup must stay offline")),
+      createVector: () => undefined,
+      createAgent: () => fakeAgent(() => assert.fail("startup must stay offline")),
+    },
+  });
+  assert.equal(daemon.store.getDreamPublication("dream-restart")?.status, "lost_ack");
+  await daemon.close();
 });
 
 test("default synchronous configuration check requires owner-only writable Codex auth state", async (t) => {

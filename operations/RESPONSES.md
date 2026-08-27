@@ -37,10 +37,11 @@ find-in-page occurs in that same server-side Responses request. An explicit
 user request to check or use web/search/fetch deterministically requires only
 `web_search` on the first leg; ordinary conversation leaves search available
 without forcing it, and function continuations never force a second search.
-The host turns
-only safe lifecycle labels into one Telegram progress message and turns valid
-web citations into final clickable links. Query strings, raw URLs, raw tool
-output and model reasoning are never displayed as progress.
+The host accumulates each safe lifecycle as its own short English row in one
+temporary Telegram progress message and turns valid web citations into final
+clickable links. Search text and URL host/path may be shown value-only, without
+argument-key prefixes; URL credentials/query/hash, arbitrary arguments, raw
+tool output and model reasoning are never displayed.
 
 Every leg uses `store: false`. Local-function continuations replay the bounded
 same-turn input plus normalized output items and `function_call_output` items;
@@ -50,7 +51,8 @@ causal RAG packet instead.
 
 The final rich reply has a host-only italic status footer. It reports pinned
 Luna/Fast, actual final-leg input tokens against the 272k Luna context window,
-and the weekly subscription window only when `GET /backend-api/wham/usage`
+hosted-web plus local tool-call count, whole-run wall-clock duration, and the
+weekly subscription window only when `GET /backend-api/wham/usage`
 returns it for the same OAuth account. This best-effort request starts in
 parallel with preparation/inference, serves a bounded TTL/stale cache, and is
 never awaited by final publication. An unavailable result renders as unknown;
@@ -59,7 +61,7 @@ replace the stateless causal loop with provider session compaction: no durable
 provider conversation id exists, and that would weaken causal cutoffs and make
 cache behavior less deterministic. A separately authorised 2026-08-27 direct
 subscription compatibility probe accepted the code-owned
-`prompt_cache_key: "parilka:responses:v1"` alongside `store: false` and
+`prompt_cache_key: "parilka:responses:v2"` alongside `store: false` and
 `tool_choice: "none"`; the bot now sends that non-PII key on every leg. Bump
 the version only when its shared instructions/tool contract changes; never
 derive it from a chat, user, message, or secret. Two tiny accepted probes each
@@ -69,10 +71,19 @@ promise of a cache hit. Do not add cache TTL fields: they remain unverified on
 the subscription endpoint, which has rejected other Platform-only fields.
 
 The model sees one validated Telegram `input_image` when present and exactly
-five host functions: `rag_bm25_search`, `keyword_search`, `read_chat_slice`,
-`day_digest`, `thread_context`. They are local/read-only and receive trusted
-chat/trigger identity from the host. The model has no shell, terminal,
+six host functions: `rag_bm25_search`, `keyword_search`, `read_chat_slice`,
+`day_digest`, `thread_context`, `load_chat_skill`. They are local/read-only and
+receive trusted chat/trigger identity from the host. The skill loader accepts
+an exact name only and returns only a same-chat skill from before the trigger.
+The model has no shell, terminal,
 filesystem, Telegram write/delete, generic MCP or arbitrary tool surface.
+
+Dream remains nightly tokenless maintenance. Its staged review-tool calls do
+not enter Telegram's transient progress UI. A successful Dream commit may
+atomically enqueue one bounded permanent digest; the Bot owner later sends it
+unthreaded. It reports only changed layer counts and bounded skill names or
+lesson/note titles, never memory/instruction text, review content or raw tool
+data. Lost acknowledgement is terminal and never blindly retried.
 
 The bot starts `typing` immediately after durable lease and before upstream
 HTTP, maintains a heartbeat, updates a single transient tool-progress message,

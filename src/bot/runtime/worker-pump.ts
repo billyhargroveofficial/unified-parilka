@@ -1,10 +1,15 @@
-import type { BotTurnWorker, BotTurnWorkerResult, JsonEventLogger } from "../worker.js";
+import type { BotTurnWorker, JsonEventLogger } from "../worker.js";
 import type { BotWorkNotifier } from "./contracts.js";
 import { MAX_BOT_WORKER_CONCURRENCY } from "./contracts.js";
 import { boundedInteger, compact, safeErrorCode } from "./helpers.js";
 
+export interface BotWorkerRunResult {
+  readonly status: string;
+  readonly retryAfterMs?: number;
+}
+
 export interface BotWorkerPort {
-  runOnce(): Promise<BotTurnWorkerResult>;
+  runOnce(): Promise<BotWorkerRunResult>;
 }
 
 export interface BotWorkerPumpOptions {
@@ -20,9 +25,10 @@ export interface BotWorkerDrainResult {
 }
 
 /**
- * Event-driven worker pump. It performs no idle polling and never invokes one
- * worker instance concurrently with itself. A successful/terminal turn causes
- * one extra probe round so a durable FIFO backlog is drained.
+ * Event-driven worker pump. It performs no tight idle polling and never
+ * invokes one worker instance concurrently with itself. A worker may return a
+ * bounded retry delay for an external durable queue that cannot notify this
+ * process directly.
  */
 export class BotWorkerPump implements BotWorkNotifier {
   readonly #slots: Array<{ worker: BotWorkerPort; busy: boolean }>;

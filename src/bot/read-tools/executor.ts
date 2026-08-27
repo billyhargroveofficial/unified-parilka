@@ -17,15 +17,18 @@ import {
   type BotReadToolDefinition,
   type BotReadToolName,
   type BotReadToolResult,
+  type BotReadToolSkillStore,
   type BotReadToolsOptions,
 } from "./contracts.js";
 import {
   failure,
   normalizeReadToolError,
+  success,
 } from "./payload.js";
 import {
   dayDigestArgsSchema,
   keywordSearchArgsSchema,
+  loadChatSkillArgsSchema,
   ragBm25SearchArgsSchema,
   readChatSliceArgsSchema,
   threadContextArgsSchema,
@@ -36,6 +39,7 @@ const MAX_CHAT_SEARCH_TIMEOUT_MS = 5 * 60_000;
 
 export class BotReadTools {
   readonly #cacheContext: CacheExecutorContext;
+  readonly #skillStore: BotReadToolSkillStore | undefined;
 
   constructor(options: BotReadToolsOptions) {
     const chatId = requireNonEmpty(options.chatId, "chatId");
@@ -54,6 +58,7 @@ export class BotReadTools {
       chatSearchTimeoutMs,
       botSenderId: options.botSenderId,
     };
+    this.#skillStore = options.skillStore;
   }
 
   listTools(): readonly BotReadToolDefinition[] {
@@ -106,11 +111,67 @@ export class BotReadTools {
             threadContextArgsSchema.parse(rawArgs ?? {}),
             options.sourceMessageId,
           );
+        case "load_chat_skill":
+          return executeLoadChatSkill(
+            this.#skillStore,
+            this.#cacheContext.chatId,
+            loadChatSkillArgsSchema.parse(rawArgs ?? {}),
+            options.sourceMessageId,
+          );
       }
     } catch (error) {
       return failure(name, normalizeReadToolError(error));
     }
   }
+}
+
+function executeLoadChatSkill(
+  skillStore: BotReadToolSkillStore | undefined,
+  chatId: string,
+  args: { name: string },
+  sourceMessageId: number | undefined,
+): BotReadToolResult {
+  if (skillStore === undefined) {
+    return failure("load_chat_skill", {
+      code: "cache_error",
+      retryable: false,
+      message: "Chat skill storage is unavailable.",
+    });
+  }
+  // A skill is derived by a background pass. Without a host-owned trigger
+  // boundary, even a same-chat row may have been created after this turn.
+  if (!isPositiveSafeInteger(sourceMessageId)) {
+    return success("load_chat_skill", "empty", { name: args.name, found: false }, []);
+  }
+  const skill = skillStore.getChatSkill({ chatId, name: args.name });
+  if (skill === undefined) {
+    return success("load_chat_skill", "empty", { name: args.name, found: false }, []);
+  }
+  if (!isVisibleCausalSkill(skill, chatId, sourceMessageId)) {
+    return success("load_chat_skill", "empty", { name: args.name, found: false }, []);
+  }
+  return success("load_chat_skill", "done", {
+    name: skill.name,
+    description: skill.description,
+    instructions: skill.instructions,
+  }, []);
+}
+
+function isVisibleCausalSkill(
+  value: { chatId: string; name: string; description: string; instructions: string; sourceMessageId?: number },
+  chatId: string,
+  triggerMessageId: number,
+): boolean {
+  return value.chatId === chatId &&
+    typeof value.name === "string" && value.name.trim() !== "" &&
+    typeof value.description === "string" && value.description.trim() !== "" &&
+    typeof value.instructions === "string" && value.instructions.trim() !== "" &&
+    isPositiveSafeInteger(value.sourceMessageId) &&
+    value.sourceMessageId < triggerMessageId;
+}
+
+function isPositiveSafeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 }
 
 function isBotReadToolName(value: string): value is BotReadToolName {

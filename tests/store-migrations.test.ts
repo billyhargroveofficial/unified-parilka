@@ -31,11 +31,11 @@ test("old fixture DB migrates once and rebuilds FTS for historical rows", (t) =>
 
   const store = new MessageStore(dbPath);
 
-  assert.equal(store.getSchemaVersion(), 23);
+  assert.equal(store.getSchemaVersion(), 24);
   assert.equal(store.search({ chatId: "-1001", query: "historical", limit: 10 }).length, 1);
 
   const reopened = new MessageStore(dbPath);
-  assert.equal(reopened.getSchemaVersion(), 23);
+  assert.equal(reopened.getSchemaVersion(), 24);
   assert.equal(reopened.search({ chatId: "-1001", query: "searchable", limit: 10 })[0]?.messageId, 1);
 });
 
@@ -162,7 +162,7 @@ test("version 5 fixture without send tables migrates send audit schema", (t) => 
 
   const store = new MessageStore(dbPath);
 
-  assert.equal(store.getSchemaVersion(), 23);
+  assert.equal(store.getSchemaVersion(), 24);
   assert.equal(store.search({ chatId: "-1001", query: "preexisting", limit: 10 })[0]?.messageId, 1);
   assert.equal(store.countMessages("-1001"), 1);
   const [legacyStats] = store.getEmbeddingStats("-1001");
@@ -200,8 +200,10 @@ test("version 5 fixture without send tables migrates send audit schema", (t) => 
   try {
     assertSqliteObject(inspect, "table", "send_outbox");
     assertSqliteObject(inspect, "table", "send_throttle_state");
+    assertSqliteObject(inspect, "table", "bot_dream_publications");
     assertSqliteObject(inspect, "index", "idx_send_outbox_chat_status");
     assertSqliteObject(inspect, "index", "idx_send_outbox_user_status");
+    assertSqliteObject(inspect, "index", "idx_bot_dream_publications_due");
     assertSqliteObject(inspect, "table", "message_embedding_chunk_messages");
     assertSqliteObject(inspect, "table", "schema_object_versions");
     assertSqliteObject(inspect, "table", "maintenance_jobs");
@@ -238,7 +240,7 @@ test("stale managed FTS and trigger definitions are repaired", (t) => {
   db.close();
 
   const repaired = new MessageStore(dbPath);
-  assert.equal(repaired.getSchemaVersion(), 23);
+  assert.equal(repaired.getSchemaVersion(), 24);
   assert.equal(repaired.search({ chatId: "-1001", query: "repaired", limit: 10 })[0]?.messageId, 1);
   repaired.upsertMessages(
     { chatId: "-1001", requested: "-1001", kind: "Fake" },
@@ -342,7 +344,7 @@ test("large embedding membership migration is deferred with maintenance status",
   db.close();
 
   const migrated = new MessageStore(dbPath);
-  assert.equal(migrated.getSchemaVersion(), 23);
+  assert.equal(migrated.getSchemaVersion(), 24);
   const job = migrated.getMaintenanceJobs().find((item) => item.name === "embedding_chunk_membership_backfill");
   assert.equal(job?.status, "pending");
   assert.equal(job?.details?.chunkCount, 1001);

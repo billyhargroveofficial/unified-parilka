@@ -28,10 +28,11 @@ canonical plain text to Bot API limits.
 ## Responses presentation boundary
 
 Hosted web citations are converted to a small deduplicated clickable footer.
-The final answer never includes raw hosted tool events, query text, URLs from
-progress, reasoning or function output. During generation, immediate `typing`
-and one transient progress message show only safe labels such as thinking,
-searching/opening a page, checking local history and processing an image. That
+The final answer never includes raw hosted tool events, reasoning or function
+output. During generation, immediate `typing` and one transient progress
+message accumulate one compact English row per tool call with a bounded
+allowlisted value such as a web query, URL host/path, local query, date/range
+or message id. Redundant argument-key prefixes are omitted. That
 message is deleted before the final rich reply and excluded from corpus/digest
 input.
 

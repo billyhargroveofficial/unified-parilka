@@ -7,6 +7,8 @@ import { boundedInteger, compact } from "./helpers.js";
 export interface BotApiRuntimeOptions {
   poller: BotApiLongPoller;
   workers: BotWorkerPump;
+  /** Independent low-volume sender; it must never occupy a user-turn slot. */
+  maintenanceWorkers?: BotWorkerPump;
   /** Stops queue-held chat-action timers after active workers drain. */
   typingLeases?: Pick<TypingLeaseManager, "stopAll">;
   shutdownTimeoutMs?: number;
@@ -16,6 +18,7 @@ export interface BotApiRuntimeOptions {
 export class BotApiRuntime {
   readonly #poller: BotApiLongPoller;
   readonly #workers: BotWorkerPump;
+  readonly #maintenanceWorkers: BotWorkerPump | undefined;
   readonly #typingLeases: Pick<TypingLeaseManager, "stopAll"> | undefined;
   readonly #shutdownTimeoutMs: number;
   readonly #logger: JsonEventLogger | undefined;
@@ -23,6 +26,7 @@ export class BotApiRuntime {
   constructor(options: BotApiRuntimeOptions) {
     this.#poller = options.poller;
     this.#workers = options.workers;
+    this.#maintenanceWorkers = options.maintenanceWorkers;
     this.#typingLeases = options.typingLeases;
     this.#shutdownTimeoutMs = boundedInteger(
       options.shutdownTimeoutMs ?? 180_000,
@@ -36,7 +40,10 @@ export class BotApiRuntime {
   async run(signal?: AbortSignal): Promise<BotWorkerDrainResult> {
     let pollError: unknown;
     try {
-      await this.#poller.run(signal, () => this.#workers.start());
+      await this.#poller.run(signal, () => {
+        this.#workers.start();
+        this.#maintenanceWorkers?.start();
+      });
     } catch (error) {
       pollError = error;
     } finally {
@@ -47,7 +54,15 @@ export class BotApiRuntime {
     // while systemd is counting down the termination deadline.
     let drained: BotWorkerDrainResult;
     try {
-      drained = await this.#workers.stop(this.#shutdownTimeoutMs);
+      const [turns, maintenance] = await Promise.all([
+        this.#workers.stop(this.#shutdownTimeoutMs),
+        this.#maintenanceWorkers?.stop(this.#shutdownTimeoutMs) ??
+          Promise.resolve({ drained: true, activeWorkers: 0 }),
+      ]);
+      drained = {
+        drained: turns.drained && maintenance.drained,
+        activeWorkers: turns.activeWorkers + maintenance.activeWorkers,
+      };
     } finally {
       this.#typingLeases?.stopAll();
     }

@@ -140,6 +140,7 @@ function completedResult(overrides: Partial<RunResponsesTurnResult> = {}): RunRe
     text: "completed text",
     annotations: [],
     functionCalls: 0,
+    hostedWebCalls: 0,
     completed: true,
     finishStatus: "completed",
     usage: { inputTokens: 3, cachedInputTokens: 0, outputTokens: 5, reasoningOutputTokens: 2, totalTokens: 8 },

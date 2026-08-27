@@ -4,12 +4,14 @@ import type {
   BotDurableStatus,
   BotTurnProgressState,
   DaemonStatus,
+  DreamPublicationStatus,
   MaintenanceJob,
   MaintenanceJobStatus,
   SendOutboxStatus,
   StoredBotTurn,
   StoredBotUpdate,
   StoredDayDigest,
+  StoredDreamPublication,
   StoredDigestRollup,
   StoredEmbeddingChunk,
   StoredMessage,
@@ -182,6 +184,38 @@ export function rowToSendOutboxItem(row: Record<string, unknown>): StoredSendOut
     sendingAtMs: row.sending_at_ms == null ? undefined : Number(row.sending_at_ms),
     sentAtMs: row.sent_at_ms == null ? undefined : Number(row.sent_at_ms),
     expiresAtMs: Number(row.expires_at_ms),
+  };
+}
+
+export function rowToStoredDreamPublication(
+  row: Record<string, unknown>,
+): StoredDreamPublication {
+  return {
+    id: String(row.id),
+    dedupeKey: String(row.dedupe_key),
+    payloadHash: String(row.payload_hash),
+    chatId: String(row.chat_id),
+    markdown: String(row.markdown),
+    plainText: String(row.plain_text),
+    status: String(row.status) as DreamPublicationStatus,
+    attempts: Number(row.attempts),
+    maxAttempts: Number(row.max_attempts),
+    leaseOwner: row.lease_owner == null ? undefined : String(row.lease_owner),
+    retryNotBeforeMs:
+      row.retry_not_before_ms == null
+        ? undefined
+        : Number(row.retry_not_before_ms),
+    telegramMessageId:
+      row.telegram_message_id == null
+        ? undefined
+        : Number(row.telegram_message_id),
+    error: row.error == null ? undefined : String(row.error),
+    createdAtMs: Number(row.created_at_ms),
+    updatedAtMs: Number(row.updated_at_ms),
+    sendingAtMs: row.sending_at_ms == null ? undefined : Number(row.sending_at_ms),
+    sentAtMs: row.sent_at_ms == null ? undefined : Number(row.sent_at_ms),
+    completedAtMs:
+      row.completed_at_ms == null ? undefined : Number(row.completed_at_ms),
   };
 }
 

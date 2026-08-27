@@ -13,13 +13,15 @@ export type ValidatedLocalToolName =
   | "keyword_search"
   | "read_chat_slice"
   | "day_digest"
-  | "thread_context";
+  | "thread_context"
+  | "load_chat_skill";
 
 export type ResponsesImageProgressKind = "input" | "view" | "generation";
 
 export interface ResponsesWebProgressEvent {
   readonly itemId: string;
   readonly action: ResponsesWebAction;
+  readonly input?: Readonly<Record<string, unknown>>;
 }
 
 /**
@@ -31,6 +33,7 @@ export interface ValidatedLocalToolDispatch {
   readonly callId: string;
   readonly toolName: ValidatedLocalToolName;
   readonly validation: "accepted";
+  readonly input?: Readonly<Record<string, unknown>>;
 }
 
 export interface ResponsesImageProgressEvent {
@@ -39,29 +42,31 @@ export interface ResponsesImageProgressEvent {
 }
 
 const WEB_LABELS: Readonly<Record<ResponsesWebAction, string>> = {
-  search: "веб-поиск",
-  open_page: "открываю страницу",
-  find_in_page: "ищу на странице",
+  search: "web_search",
+  open_page: "web_fetch",
+  find_in_page: "find_in_page",
 };
 
 const LOCAL_LABELS: Readonly<Record<ValidatedLocalToolName, string>> = {
-  rag_bm25_search: "ищу по чату",
-  keyword_search: "ищу сообщения",
-  read_chat_slice: "читаю историю",
-  day_digest: "читаю сводку",
-  thread_context: "читаю ветку",
+  rag_bm25_search: "rag_bm25_search",
+  keyword_search: "keyword_search",
+  read_chat_slice: "read_chat_slice",
+  day_digest: "day_digest",
+  thread_context: "thread_context",
+  load_chat_skill: "load_chat_skill",
 };
 
 const IMAGE_LABELS: Readonly<Record<ResponsesImageProgressKind, string>> = {
-  input: "подготавливаю изображение",
-  view: "просматриваю изображение",
-  generation: "генерирую изображение",
+  input: "input_image",
+  view: "view_image",
+  generation: "image_generation",
 };
 
 /**
  * Projects a typed, metadata-only Responses lifecycle into the existing one
  * bubble publisher. It has no Telegram API dependency and never sees model
- * deltas, search queries, URLs, tool arguments, outputs, or image bytes.
+ * deltas, tool outputs, or image bytes. Bounded hosted selectors and
+ * schema-validated local arguments are forwarded for a one-line allowlist.
  */
 export class ResponsesTelegramProgress {
   readonly #port: ToolProgressPort | undefined;
@@ -101,7 +106,7 @@ export class ResponsesTelegramProgress {
     if (label === undefined) {
       return;
     }
-    this.#start(`responses:web:${itemId}`, label);
+    this.#start(`responses:web:${itemId}`, label, "hosted_web", event.input);
   }
 
   completeWeb(itemId: string, ok = true): void {
@@ -118,7 +123,12 @@ export class ResponsesTelegramProgress {
     if (label === undefined) {
       return;
     }
-    this.#start(`responses:function:${callId}`, label);
+    this.#start(
+      `responses:function:${callId}`,
+      label,
+      event.toolName,
+      event.input,
+    );
   }
 
   completeValidatedLocalTool(callId: string, ok: boolean): void {
@@ -131,7 +141,7 @@ export class ResponsesTelegramProgress {
     if (label === undefined) {
       return;
     }
-    this.#start(`responses:image:${itemId}`, label);
+    this.#start(`responses:image:${itemId}`, label, `image:${event.kind}`);
   }
 
   completeImage(itemId: string, ok = true): void {
@@ -147,14 +157,25 @@ export class ResponsesTelegramProgress {
     this.completeThinking(ok);
   }
 
-  #start(callId: string, toolName: string): void {
+  #start(
+    callId: string,
+    toolName: string,
+    toolId: string,
+    input?: Readonly<Record<string, unknown>>,
+  ): void {
     const previous = this.#events.get(callId);
-    if (previous?.toolName === toolName) {
+    if (previous?.toolName === toolName &&
+      progressInputFingerprint(previous.input) === progressInputFingerprint(input)) {
       return;
     }
     this.#toolObserved = true;
     this.completeThinking(true);
-    const event = { callId, toolName };
+    const event = {
+      callId,
+      toolName,
+      toolId,
+      ...(input === undefined ? {} : { input }),
+    };
     this.#events.set(callId, event);
     notify(() => this.#port?.onToolStarted(event));
   }
@@ -167,6 +188,12 @@ export class ResponsesTelegramProgress {
     this.#events.delete(callId);
     notify(() => this.#port?.onToolCompleted(event, ok));
   }
+}
+
+function progressInputFingerprint(
+  input: Readonly<Record<string, unknown>> | undefined,
+): string {
+  return input === undefined ? "" : JSON.stringify(input);
 }
 
 function requiredId(value: string, name: string): string {

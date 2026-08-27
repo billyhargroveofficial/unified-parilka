@@ -23,6 +23,8 @@ test("strict schemas reject malformed, coerced, and extra arguments as data", as
     ["day_digest", { day_from: "2026-02-30" }, "day_from"],
     ["day_digest", { day_from: "вчера" }, "day_from"],
     ["thread_context", { message_id: 0 }, "message_id"],
+    ["load_chat_skill", { name: "" }, "name"],
+    ["load_chat_skill", { name: "x", unexpected: true }, "unexpected"],
     [
       "thread_context",
       { message_id: 1, before: -1, after: 31 },

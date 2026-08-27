@@ -8,13 +8,15 @@ export interface ResponsesStatusFooter {
   readonly inputTokens?: number;
   readonly usage?: CodexSubscriptionUsageSnapshot;
   readonly nowMs?: number;
+  readonly toolCalls: number;
+  readonly durationMs: number;
 }
 
 /** Trusted post-turn presentation; this text never enters a model request. */
 export function renderResponsesStatusFooter(input: ResponsesStatusFooter): string {
   const context = input.inputTokens === undefined ? "?" : compactTokens(input.inputTokens);
   const usage = renderWeeklyUsage(selectWeeklyWindow(input.usage), input.nowMs ?? Date.now());
-  return `\n\n*GPT-5.6 Luna Fast · ctx ${context}/${compactTokens(LUNA_CONTEXT_WINDOW_TOKENS)} ● ${usage}*`;
+  return `\n\n*GPT-5.6 Luna Fast · ctx ${context}/${compactTokens(LUNA_CONTEXT_WINDOW_TOKENS)} · tools ${compactCount(input.toolCalls)} · ${compactDuration(input.durationMs)} ● ${usage}*`;
 }
 
 function selectWeeklyWindow(
@@ -38,6 +40,28 @@ function renderWeeklyUsage(window: CodexSubscriptionUsageSnapshot["primary"], no
 
 function compactTokens(value: number): string {
   return value < 1_000 ? String(value) : `${Math.round(value / 1_000)}k`;
+}
+
+function compactCount(value: number): string {
+  return Number.isSafeInteger(value) && value >= 0 ? String(value) : "?";
+}
+
+function compactDuration(milliseconds: number): string {
+  if (!Number.isFinite(milliseconds) || milliseconds < 0) return "?";
+  const rounded = Math.round(milliseconds);
+  if (rounded < 1_000) return `${rounded}ms`;
+  if (rounded < 10_000) {
+    return `${(rounded / 1_000).toFixed(1).replace(/\.0$/u, "")}s`;
+  }
+  if (rounded < 60_000) return `${Math.round(rounded / 1_000)}s`;
+  if (rounded < 3_600_000) {
+    const minutes = Math.floor(rounded / 60_000);
+    const seconds = Math.floor((rounded % 60_000) / 1_000);
+    return `${minutes}m${seconds}s`;
+  }
+  const hours = Math.floor(rounded / 3_600_000);
+  const minutes = Math.floor((rounded % 3_600_000) / 60_000);
+  return `${hours}h${minutes}m`;
 }
 
 function compactRemaining(milliseconds: number): string {

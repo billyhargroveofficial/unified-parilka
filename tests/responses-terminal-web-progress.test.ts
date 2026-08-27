@@ -8,14 +8,18 @@ import {
   type ResponsesStreamTransport,
 } from "../src/openai-responses/index.js";
 import { ResponsesTelegramProgress } from "../src/bot/responses-telegram/index.js";
-import type { ToolProgressPort } from "../src/bot/tool-progress.js";
+import type { ToolProgressEvent, ToolProgressPort } from "../src/bot/tool-progress.js";
 
 test("terminal-only hosted web records render safe Telegram search/open/find lifecycles", async () => {
   const visible: string[] = [];
+  const started: ToolProgressEvent[] = [];
   const progress = new ResponsesTelegramProgress({
     onThinkingStarted: ({ callId }) => { visible.push(`thinking:start:${callId}`); },
     onThinkingCompleted: ({ callId }, ok) => { visible.push(`thinking:done:${String(ok)}:${callId}`); },
-    onToolStarted: ({ callId, toolName }) => { visible.push(`tool:start:${callId}:${toolName}`); },
+    onToolStarted: (event) => {
+      started.push(event);
+      visible.push(`tool:start:${event.callId}:${event.toolName}`);
+    },
     onToolCompleted: ({ callId, toolName }, ok) => { visible.push(`tool:done:${String(ok)}:${callId}:${toolName}`); },
   } satisfies ToolProgressPort);
   const client = new OpenAiResponsesTurnClient(new TerminalOnlyTransport());
@@ -29,14 +33,22 @@ test("terminal-only hosted web records render safe Telegram search/open/find lif
   assert.match(visible[0] ?? "", /^thinking:start:responses:thinking:thinking:[A-Za-z0-9-]+$/u);
   assert.match(visible[1] ?? "", /^thinking:done:true:responses:thinking:thinking:[A-Za-z0-9-]+$/u);
   assert.deepEqual(visible.slice(2), [
-    "tool:start:responses:web:terminal-search:веб-поиск",
-    "tool:done:true:responses:web:terminal-search:веб-поиск",
-    "tool:start:responses:web:terminal-open:открываю страницу",
-    "tool:done:true:responses:web:terminal-open:открываю страницу",
-    "tool:start:responses:web:terminal-find:ищу на странице",
-    "tool:done:true:responses:web:terminal-find:ищу на странице",
+    "tool:start:responses:web:terminal-search:web_search",
+    "tool:done:true:responses:web:terminal-search:web_search",
+    "tool:start:responses:web:terminal-open:web_fetch",
+    "tool:done:true:responses:web:terminal-open:web_fetch",
+    "tool:start:responses:web:terminal-find:find_in_page",
+    "tool:done:true:responses:web:terminal-find:find_in_page",
   ]);
-  assert.doesNotMatch(visible.join("\n"), /https?:\/\/|private query|needle/u);
+  assert.deepEqual(started.map(({ toolName, toolId, input }) => ({ toolName, toolId, input })), [
+    { toolName: "web_search", toolId: "hosted_web", input: { query: "private query" } },
+    { toolName: "web_fetch", toolId: "hosted_web", input: { url: "https://private.example" } },
+    {
+      toolName: "find_in_page",
+      toolId: "hosted_web",
+      input: { pattern: "needle", url: "https://private.example" },
+    },
+  ]);
 });
 
 test("late subscription action metadata renders search/open/find instead of three searches", async () => {
@@ -82,11 +94,10 @@ test("late subscription action metadata renders search/open/find instead of thre
     progress: { onProgress: (event) => project(event, progress) },
   });
 
-  assert.ok(visible.includes("start:веб-поиск"));
-  assert.ok(visible.includes("start:открываю страницу"));
-  assert.ok(visible.includes("start:ищу на странице"));
-  assert.equal(visible.filter((entry) => entry === "start:веб-поиск").length, 3);
-  assert.doesNotMatch(visible.join("\n"), /https?:\/\/|needle|query/u);
+  assert.ok(visible.includes("start:web_search"));
+  assert.ok(visible.includes("start:web_fetch"));
+  assert.ok(visible.includes("start:find_in_page"));
+  assert.equal(visible.filter((entry) => entry === "start:web_search").length, 3);
 });
 
 class TerminalOnlyTransport implements ResponsesStreamTransport {
@@ -134,8 +145,16 @@ function project(event: ResponsesProgressEvent, progress: ResponsesTelegramProgr
   switch (event.type) {
     case "thinking_started": progress.startThinking(event.callId); break;
     case "thinking_completed": progress.completeThinking(event.ok); break;
-    case "hosted_web_started": progress.startWeb({ itemId: event.callId, action: event.action ?? "search" }); break;
-    case "hosted_web_action": progress.startWeb({ itemId: event.callId, action: event.action }); break;
+    case "hosted_web_started": progress.startWeb({
+      itemId: event.callId,
+      action: event.action ?? "search",
+      ...(event.input === undefined ? {} : { input: { ...event.input } }),
+    }); break;
+    case "hosted_web_action": progress.startWeb({
+      itemId: event.callId,
+      action: event.action,
+      ...(event.input === undefined ? {} : { input: { ...event.input } }),
+    }); break;
     case "hosted_web_completed": progress.completeWeb(event.callId, event.ok); break;
     case "local_function_started":
     case "local_function_completed":

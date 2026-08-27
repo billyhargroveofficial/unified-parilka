@@ -13,7 +13,7 @@
 ## Runtime owners
 
 - `src/bot/`, `src/bot-daemon/`: durable Bot API lifecycle, direct Responses
-  request loop, direct image input, typing/progress/rich publication and five
+  request loop, direct image input, typing/progress/rich publication and six
   host-managed read-only history tools.
 - `src/openai-responses/`: narrow official-SDK transport. Bot requests are
   hard-pinned to `gpt-5.6-luna` and `service_tier: "fast"`, with hosted web
@@ -29,11 +29,17 @@
 
 ## Non-negotiable bot boundary
 
-The model has hosted web search/open/find, trusted image input and exactly five
+The model has hosted web search/open/find, trusted image input and exactly six
 local read functions: `rag_bm25_search`, `keyword_search`, `read_chat_slice`,
-`day_digest`, `thread_context`. It has no terminal, filesystem mutation,
-Telegram write or generic host tools. Host-injected causal cutoff is always
-`message_id < trigger`.
+`day_digest`, `thread_context`, `load_chat_skill`. It has no terminal,
+filesystem mutation, Telegram write or generic host tools. The host injects
+the chat/trigger boundary; a skill load accepts an exact name and only resolves
+the same chat's skill from before `message_id < trigger`.
+
+Dream is nightly tokenless maintenance. Its staged review tools are not live
+Telegram progress; after an atomic successful commit, it may queue one bounded
+permanent public digest for the Bot owner to send. That digest contains only
+changed names/titles/counts, never skill/memory/review content.
 
 ## Workflow
 

@@ -22,7 +22,7 @@ validates it, then returns only an in-memory `data:image/...` URL.
 ## Model surface
 
 Every bot request uses direct Codex subscription Responses with `gpt-5.6-luna`,
-Fast `service_tier: "priority"` on the wire, hosted `web_search`, and at most the five local
+Fast `service_tier: "priority"` on the wire, hosted `web_search`, and at most the six local
 read-only functions:
 
 - `rag_bm25_search`
@@ -30,10 +30,12 @@ read-only functions:
 - `read_chat_slice`
 - `day_digest`
 - `thread_context`
+- `load_chat_skill` — exact named skill for the same causal chat
 
 The model receives no terminal, shell, arbitrary file access, deletion,
 Telegram write or generic host tool. The host supplies causal chat/trigger
-identity, so reads must remain below `message_id < trigger`.
+identity. `load_chat_skill` accepts only a name and can disclose only the
+matching same-chat skill whose source precedes `message_id < trigger`.
 
 An explicit request to check or use web/search/fetch uses an initial-leg
 `allowed_tools` policy requiring only hosted `web_search`. Casual turns keep
@@ -47,10 +49,13 @@ output items together with `function_call_output`, never a
 
 `causal-rag/` creates a bounded untrusted context packet from reply/recent
 messages, local BGE-M3 hybrid retrieval and day digests. Timeout/degradation
-means bounded recent context, not external retrieval. Tool progress never
-contains raw arguments, URLs, queries, model reasoning or tool results. One
-temporary Telegram message is edited and removed before the final native rich
-Markdown reply; if Telegram cannot confirm deletion, its exact message id
+means bounded recent context, not external retrieval. One temporary progress
+message accumulates one short English row per tool call with an allowlisted
+value only: bounded query text, URL host/path, find pattern, date/range,
+message id or skill name, without argument-key prefixes. URL
+credentials/query/hash, arbitrary arguments, model
+reasoning and tool results stay hidden. The message is edited and removed before the
+final native rich Markdown reply; if Telegram cannot confirm deletion, its exact message id
 remains a terminal durable fence and is retried at a bounded cadence without
 blocking the final reply. Web citations are rendered as safe clickable links.
 

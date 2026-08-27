@@ -9,7 +9,7 @@ import { resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { SqlRow } from "./contracts.js";
 
-const MAX_SUPPORTED_TARGET_SCHEMA_VERSION = 23;
+const MAX_SUPPORTED_TARGET_SCHEMA_VERSION = 24;
 
 const LEGACY_TABLE_COLUMNS = {
   live_msg: [

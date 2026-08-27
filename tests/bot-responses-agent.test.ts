@@ -5,7 +5,7 @@ import type { BotAgentRequest } from "../src/bot/agent-contract.js";
 import type { CausalRagPacket } from "../src/bot/causal-rag/index.js";
 import type { LocalFunctionCall, RunResponsesTurnRequest, RunResponsesTurnResult } from "../src/openai-responses/index.js";
 
-test("Responses bot agent builds a trusted RAG/image turn with only five read tools", async () => {
+test("Responses bot agent builds a trusted RAG/image turn with only six read tools", async () => {
   const requests: RunResponsesTurnRequest[] = [];
   const ragInputs: unknown[] = [];
   const toolCalls: { name: string; args: unknown; sourceMessageId: number }[] = [];
@@ -15,14 +15,24 @@ test("Responses bot agent builds a trusted RAG/image turn with only five read to
       async run(request) {
         requests.push(request);
         await request.progress?.onProgress({ type: "thinking_started", callId: "t-1" });
-        await request.progress?.onProgress({ type: "hosted_web_action", callId: "web-1", action: "open_page" });
-        await request.progress?.onProgress({ type: "local_function_started", callId: "fn-1", name: "keyword_search" });
+        await request.progress?.onProgress({
+          type: "hosted_web_action",
+          callId: "web-1",
+          action: "open_page",
+          input: { url: "https://example.com/doc" },
+        });
+        await request.progress?.onProgress({
+          type: "local_function_started",
+          callId: "fn-1",
+          name: "keyword_search",
+          arguments: { query: "баня" },
+        });
         const output = await request.dispatcher.dispatch({ callId: "fn-1", name: "keyword_search", arguments: { query: "баня" } }, request.signal!);
         assert.equal(output.success, true);
         await request.progress?.onProgress({ type: "local_function_completed", callId: "fn-1", name: "keyword_search", ok: true });
         await request.progress?.onProgress({ type: "hosted_web_completed", callId: "web-1", ok: true });
         await request.progress?.onProgress({ type: "thinking_completed", callId: "t-1", ok: true });
-        return finalResult();
+        return { ...finalResult(), hostedWebCalls: 1 };
       },
     },
     causalRag: {
@@ -65,6 +75,7 @@ test("Responses bot agent builds a trusted RAG/image turn with only five read to
     { name: "rag_bm25_search", strict: false }, { name: "keyword_search", strict: false },
     { name: "read_chat_slice", strict: false }, { name: "day_digest", strict: false },
     { name: "thread_context", strict: false },
+    { name: "load_chat_skill", strict: false },
   ]);
   assert.match(core.instructions, /hosted web_search/u);
   assert.match(core.instructions, /target=true содержит текущий запрос пользователя: выполни/u);
@@ -99,11 +110,12 @@ test("Responses bot agent builds a trusted RAG/image turn with only five read to
   assert.equal(result.telemetry.finalModelId, "gpt-5.6-luna");
   assert.equal(result.telemetry.finalProviderId, "openai-responses");
   assert.equal(result.telemetry.serviceTier, "priority");
-  assert.equal(result.telemetry.toolCalls, 1);
+  assert.equal(result.telemetry.toolCalls, 2);
+  assert.match(result.text, /· tools 2 ·/u);
   assert.deepEqual(visible, [
-    "thinking:start", "thinking:end:true", "tool:start:просматриваю изображение",
-    "tool:start:открываю страницу", "tool:start:ищу сообщения", "tool:end:ищу сообщения:true",
-    "tool:end:открываю страницу:true", "tool:end:просматриваю изображение:true",
+    "thinking:start", "thinking:end:true", "tool:start:view_image",
+    "tool:start:web_fetch", "tool:start:keyword_search", "tool:end:keyword_search:true",
+    "tool:end:web_fetch:true", "tool:end:view_image:true",
   ]);
 });
 
@@ -137,7 +149,7 @@ test("Responses bot agent renders an already available quota footer after, never
 
   const result = await agent.run(request());
 
-  assert.match(result.text, /\*GPT-5\.6 Luna Fast · ctx 11\/272k ● 7d 29%/u);
+  assert.match(result.text, /\*GPT-5\.6 Luna Fast · ctx 11\/272k · tools 1 · \d+(?:\.\d+)?(?:ms|s) ● 7d 29%/u);
   assert.doesNotMatch(requests[0]!.text, /GPT-5\.6 Luna Fast|ctx \?\/272k/u);
   await agent.close();
 });
@@ -157,7 +169,7 @@ test("Responses bot agent never waits for a slow usage refresh before publicatio
       agent.run(request()),
       new Promise<never>((_resolve, reject) => { timeout = setTimeout(() => reject(new Error("usage added final latency")), 100); }),
     ]);
-    assert.match(result.text, /ctx 11\/272k ● 7d —/u);
+    assert.match(result.text, /ctx 11\/272k · tools 1 · \d+(?:\.\d+)?(?:ms|s) ● 7d —/u);
   } finally {
     if (timeout !== undefined) clearTimeout(timeout);
   }
@@ -176,7 +188,7 @@ test("Responses bot agent treats a rejected optional usage port as unknown", asy
 
   const result = await agent.run(request());
 
-  assert.match(result.text, /ctx 11\/272k ● 7d —/u);
+  assert.match(result.text, /ctx 11\/272k · tools 1 · \d+(?:\.\d+)?(?:ms|s) ● 7d —/u);
   await agent.close();
 });
 
@@ -332,7 +344,7 @@ function packet(): CausalRagPacket {
 
 function finalResult(): RunResponsesTurnResult {
   return {
-    responseId: "resp-1", model: "gpt-5.6-luna", serviceTier: "priority", text: "Готово 〔C1〕", functionCalls: 1, completed: true, finishStatus: "completed",
+    responseId: "resp-1", model: "gpt-5.6-luna", serviceTier: "priority", text: "Готово 〔C1〕", functionCalls: 1, hostedWebCalls: 0, completed: true, finishStatus: "completed",
     annotations: [
       { startIndex: 0, endIndex: 1, title: "Официальный источник", url: "https://example.com/doc" },
       { startIndex: 0, endIndex: 1, title: "unsafe", url: "http://unsafe.example" },

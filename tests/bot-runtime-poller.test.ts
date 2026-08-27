@@ -12,3 +12,30 @@ test("long poller advances offset only after durable acknowledgement and confirm
   assert.deepEqual(offsets, [undefined, 301, 301]);
   assert.equal(poller.nextOffset, 301);
 });
+
+test("durable workers become ready after identity setup, before the first long poll", async (t) => {
+  const store = makeStore(t);
+  let ready = false;
+  let readyCalls = 0;
+  let poller!: BotApiLongPoller;
+  poller = new BotApiLongPoller({
+    api: pollingApi(async () => {
+      assert.equal(ready, true);
+      poller.requestStop();
+      return [];
+    }),
+    expectedBotId: BOT_ID,
+    expectedBotUsername: BOT_USERNAME,
+    processor: new BotUpdateProcessor({
+      store,
+      coordinator: new TurnCoordinator({ maxActiveTurns: 1 }),
+      workNotifier: { notify() {} },
+      telegram: TELEGRAM_OPTIONS,
+    }),
+  });
+  await poller.run(undefined, () => {
+    ready = true;
+    readyCalls += 1;
+  });
+  assert.equal(readyCalls, 1);
+});

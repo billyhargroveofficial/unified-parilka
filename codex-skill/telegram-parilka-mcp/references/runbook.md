@@ -16,10 +16,12 @@ independent and must not be changed during Parilka work.
 
 The bot is hard-pinned to `gpt-5.6-luna` with fast tier. Each bot request has
 hosted web search and can use native search/open/find inside the same Responses
-request. It has a trusted direct image-input route and five local read-only
+request. It has a trusted direct image-input route and six local read-only
 history functions only: `rag_bm25_search`, `keyword_search`,
-`read_chat_slice`, `day_digest`, `thread_context`. No terminal, filesystem
-write/delete, Telegram write or generic host tool is available to the model.
+`read_chat_slice`, `day_digest`, `thread_context`, `load_chat_skill`. The last
+one accepts an exact name and can read only a same-chat skill whose source is
+before the trigger. No terminal, filesystem write/delete, Telegram write or
+generic host tool is available to the model.
 
 ## Ownership and presentation
 
@@ -32,6 +34,12 @@ Typing begins immediately after lease and remains heartbeated. Thinking,
 hosted web, image validation and valid local reads share one safe transient
 progress message, then it is deleted before the native rich final reply. Raw
 reasoning, search query/URL and tool body are not presentation data.
+
+Dream runs as nightly maintenance without a Bot token. Its staged review tools
+do not appear as transient Telegram progress. Only after the atomic commit may
+it queue one permanent public digest; the Bot owner sends it later. The digest
+is limited to changed names/titles/counts and excludes memory, skill and review
+content.
 
 ## Configuration and health checks
 

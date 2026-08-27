@@ -134,7 +134,11 @@ export class BotApiLongPoller {
     try {
       await this.#initialize(controller.signal);
       initialized = true;
-      let ready = false;
+      if (!this.#stopRequested) {
+        // Identity and webhook ownership are established. Durable workers can
+        // start now; they must not wait for a possibly empty long-poll cycle.
+        onReady?.();
+      }
       let backoffMs = this.#backoffInitialMs;
       while (!this.#stopRequested) {
         let batch: unknown;
@@ -175,10 +179,6 @@ export class BotApiLongPoller {
         }
 
         backoffMs = this.#backoffInitialMs;
-        if (!ready && !this.#stopRequested) {
-          onReady?.();
-          ready = true;
-        }
         const updates = updateBatch(batch);
         let retryCurrentUpdate = false;
         for (const update of updates) {

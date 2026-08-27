@@ -14,7 +14,7 @@ import {
   storeCache,
 } from "./support/bot-read-tools.js";
 
-test("the direct registry preserves the five cache read-tool contracts", () => {
+test("the direct registry preserves the six local read-tool contracts", () => {
   const names: readonly string[] = BOT_READ_TOOL_DEFINITIONS.map(
     ({ name }) => name,
   );
@@ -26,6 +26,7 @@ test("the direct registry preserves the five cache read-tool contracts", () => {
       "read_chat_slice",
       "day_digest",
       "thread_context",
+      "load_chat_skill",
     ],
   );
   for (const definition of BOT_READ_TOOL_DEFINITIONS) {

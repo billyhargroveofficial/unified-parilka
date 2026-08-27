@@ -3,6 +3,7 @@ import { isCalendarDay } from "./calendar.js";
 import {
   MAX_FIND_CHAT_MESSAGES_LIMIT,
   MAX_READ_CHAT_SLICE_COUNT,
+  type BotReadToolName,
 } from "./contracts.js";
 
 const querySchema = z.string().trim().min(1).max(500);
@@ -48,6 +49,7 @@ export const keywordSearchArgsSchema = z
   });
 
 const transcriptCursorSchema = z.string().trim().min(1).max(512);
+const skillNameSchema = z.string().trim().min(1).max(120);
 
 export const readChatSliceArgsSchema = z
   .discriminatedUnion("mode", [
@@ -123,6 +125,12 @@ export const threadContextArgsSchema = z
   })
   .strict();
 
+export const loadChatSkillArgsSchema = z
+  .object({
+    name: skillNameSchema,
+  })
+  .strict();
+
 export type RagBm25SearchArgs = z.infer<typeof ragBm25SearchArgsSchema>;
 export type KeywordSearchArgs = z.infer<typeof keywordSearchArgsSchema>;
 export type ReadChatSliceArgs = z.infer<typeof readChatSliceArgsSchema>;
@@ -130,3 +138,29 @@ export type DayDigestArgs = z.infer<typeof dayDigestArgsSchema>;
 export type ThreadContextArgs = z.infer<
   typeof threadContextArgsSchema
 >;
+export type LoadChatSkillArgs = z.infer<typeof loadChatSkillArgsSchema>;
+
+/**
+ * Validate model-supplied arguments before any selector reaches Telegram's
+ * transient progress UI. The returned object contains only schema-owned
+ * fields/defaults; rejected calls stay invisible until their bounded failure.
+ */
+export function validatedBotReadToolProgressInput(
+  name: BotReadToolName,
+  rawArgs: unknown,
+): Readonly<Record<string, unknown>> | undefined {
+  const input = rawArgs ?? {};
+  const result = (() => {
+    switch (name) {
+      case "rag_bm25_search": return ragBm25SearchArgsSchema.safeParse(input);
+      case "keyword_search": return keywordSearchArgsSchema.safeParse(input);
+      case "read_chat_slice": return readChatSliceArgsSchema.safeParse(input);
+      case "day_digest": return dayDigestArgsSchema.safeParse(input);
+      case "thread_context": return threadContextArgsSchema.safeParse(input);
+      case "load_chat_skill": return loadChatSkillArgsSchema.safeParse(input);
+    }
+  })();
+  return result.success
+    ? result.data as Readonly<Record<string, unknown>>
+    : undefined;
+}

@@ -17,7 +17,7 @@ export const OPENAI_RESPONSES_SUBSCRIPTION_SERVICE_TIER = "priority" as const;
  * A code-owned, non-PII cache partition for the stable Responses prompt
  * prefix. Bump this only when the shared prompt/tool contract changes.
  */
-export const OPENAI_RESPONSES_PROMPT_CACHE_KEY = "parilka:responses:v1" as const;
+export const OPENAI_RESPONSES_PROMPT_CACHE_KEY = "parilka:responses:v2" as const;
 /** The subscription transport normalizes successful Fast completions to this exact value. */
 export type EffectiveResponsesServiceTier = typeof OPENAI_RESPONSES_SUBSCRIPTION_SERVICE_TIER;
 export const OPENAI_WEB_SEARCH_TOOL = Object.freeze({
@@ -67,14 +67,36 @@ export interface LocalFunctionDispatcher {
 
 export type ResponsesWebAction = "search" | "open_page" | "find_in_page";
 
-/** Payloads are presentation-safe: no model reasoning, query, URL, or tool output. */
+/** Bounded hosted-web selectors that may be projected into transient Telegram UI. */
+export interface ResponsesWebProgressInput {
+  readonly query?: string;
+  readonly url?: string;
+  readonly pattern?: string;
+}
+
+/** Payloads are presentation-safe: no model reasoning, tool output, or image data. */
 export type ResponsesProgressEvent =
   | { readonly type: "thinking_started"; readonly callId: string }
   | { readonly type: "thinking_completed"; readonly callId: string; readonly ok: boolean }
-  | { readonly type: "hosted_web_started"; readonly callId: string; readonly action?: ResponsesWebAction }
-  | { readonly type: "hosted_web_action"; readonly callId: string; readonly action: ResponsesWebAction }
+  | {
+    readonly type: "hosted_web_started";
+    readonly callId: string;
+    readonly action?: ResponsesWebAction;
+    readonly input?: ResponsesWebProgressInput;
+  }
+  | {
+    readonly type: "hosted_web_action";
+    readonly callId: string;
+    readonly action: ResponsesWebAction;
+    readonly input?: ResponsesWebProgressInput;
+  }
   | { readonly type: "hosted_web_completed"; readonly callId: string; readonly ok: boolean }
-  | { readonly type: "local_function_started"; readonly callId: string; readonly name: string }
+  | {
+    readonly type: "local_function_started";
+    readonly callId: string;
+    readonly name: string;
+    readonly arguments: unknown;
+  }
   | { readonly type: "local_function_completed"; readonly callId: string; readonly name: string; readonly ok: boolean };
 
 export interface ResponsesProgressPort {
@@ -143,6 +165,7 @@ export interface RunResponsesTurnResult {
   /** The validated provider-reported effective tier for this completed turn. */
   readonly serviceTier: EffectiveResponsesServiceTier;
   readonly functionCalls: number;
+  readonly hostedWebCalls: number;
   readonly completed: true;
   readonly finishStatus: "completed";
 }

@@ -170,7 +170,7 @@ test("v21 fixture migrates to v23, preserves data, idempotent reopen", (t) => {
   raw.close();
 
   const migrated = new MessageStore(dbPath);
-  assert.equal(migrated.getSchemaVersion(), 23);
+  assert.equal(migrated.getSchemaVersion(), 24);
   assert.equal(migrated.getChatMemory(DREAM_CHAT_ID)?.memoryText, "pre");
   assert.equal(migrated.listFastChatMemory(DREAM_CHAT_ID).length, 1);
   migrated.commitDreamDay({
@@ -181,7 +181,7 @@ test("v21 fixture migrates to v23, preserves data, idempotent reopen", (t) => {
   migrated.close();
 
   const again = new MessageStore(dbPath);
-  assert.equal(again.getSchemaVersion(), 23);
+  assert.equal(again.getSchemaVersion(), 24);
   again.close();
 });
 
@@ -189,7 +189,7 @@ test("v23 read-only open", (t) => {
   const dbPath = tempDbPath(t);
   new MessageStore(dbPath).close();
   const ro = new MessageStore(dbPath, { readOnly: true });
-  try { assert.equal(ro.getSchemaVersion(), 23); } finally { ro.close(); }
+  try { assert.equal(ro.getSchemaVersion(), 24); } finally { ro.close(); }
 });
 
 test("PRAGMA quick_check ok", (t) => {

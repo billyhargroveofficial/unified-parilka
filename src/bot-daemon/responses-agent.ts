@@ -20,6 +20,7 @@ import {
 import {
   BOT_READ_TOOL_DEFINITIONS,
   BOT_READ_TOOL_NAMES,
+  validatedBotReadToolProgressInput,
   type BotReadTools,
 } from "../bot/read-tools.js";
 import {
@@ -156,9 +157,13 @@ export class ResponsesBotTurnAgent implements BotTurnAgent {
         type: "url_citation" as const, url: annotation.url, title: annotation.title,
       })), finalText)}`;
       const usage = await immediatelyAvailable(usagePromise);
+      const toolCalls = result.functionCalls + result.hostedWebCalls;
+      const durationMs = Math.max(0, Date.now() - startedAtMs);
       const text = `${visible}${renderResponsesStatusFooter({
         ...(result.usage === undefined ? {} : { inputTokens: result.usage.inputTokens }),
         ...(usage === undefined ? {} : { usage }),
+        toolCalls,
+        durationMs,
       })}`;
       assertBotAgentFinalReplyWithinLimit(text);
       completed = true;
@@ -184,8 +189,8 @@ export class ResponsesBotTurnAgent implements BotTurnAgent {
             totalTokens: result.usage.totalTokens,
             contextUsedTokens: result.usage.inputTokens,
           }),
-          toolCalls: result.functionCalls,
-          durationMs: Math.max(0, Date.now() - startedAtMs),
+          toolCalls,
+          durationMs,
           incomplete: !result.completed,
         },
       };
@@ -233,11 +238,29 @@ function forwardProgress(progress: ResponsesTelegramProgress, event: ResponsesPr
     case "thinking_completed": progress.completeThinking(event.ok); break;
     // Show the hosted call immediately. If output_item later identifies it as
     // open_page/find_in_page, the same call id updates the bubble label.
-    case "hosted_web_started": progress.startWeb({ itemId: event.callId, action: event.action ?? "search" }); break;
-    case "hosted_web_action": progress.startWeb({ itemId: event.callId, action: event.action }); break;
+    case "hosted_web_started": progress.startWeb({
+      itemId: event.callId,
+      action: event.action ?? "search",
+      ...(event.input === undefined ? {} : { input: { ...event.input } }),
+    }); break;
+    case "hosted_web_action": progress.startWeb({
+      itemId: event.callId,
+      action: event.action,
+      ...(event.input === undefined ? {} : { input: { ...event.input } }),
+    }); break;
     case "hosted_web_completed": progress.completeWeb(event.callId, event.ok); break;
     case "local_function_started":
-      if (isValidatedLocalTool(event.name)) progress.startValidatedLocalTool({ callId: event.callId, toolName: event.name, validation: "accepted" });
+      if (isValidatedLocalTool(event.name)) {
+        const input = validatedBotReadToolProgressInput(event.name, event.arguments);
+        if (input !== undefined) {
+          progress.startValidatedLocalTool({
+            callId: event.callId,
+            toolName: event.name,
+            validation: "accepted",
+            input,
+          });
+        }
+      }
       break;
     case "local_function_completed": progress.completeValidatedLocalTool(event.callId, event.ok); break;
   }
@@ -286,10 +309,10 @@ function isValidatedLocalTool(name: string): name is ValidatedLocalToolName {
 }
 
 function assertExactReadToolSurface(): void {
-  if (BOT_READ_TOOL_DEFINITIONS.length !== 5 || BOT_READ_TOOL_NAMES.length !== 5 ||
-    new Set(BOT_READ_TOOL_DEFINITIONS.map((tool) => tool.name)).size !== 5 ||
+  if (BOT_READ_TOOL_DEFINITIONS.length !== 6 || BOT_READ_TOOL_NAMES.length !== 6 ||
+    new Set(BOT_READ_TOOL_DEFINITIONS.map((tool) => tool.name)).size !== 6 ||
     BOT_READ_TOOL_DEFINITIONS.some((tool) => !isValidatedLocalTool(tool.name))) {
-    throw new Error("Responses agent requires exactly five validated local read tools.");
+    throw new Error("Responses agent requires exactly six validated local read tools.");
   }
 }
 
