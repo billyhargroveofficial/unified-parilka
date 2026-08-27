@@ -46,6 +46,7 @@
     "sync-daemon": "tsx src/sync-daemon.ts",
     "benchmark:vector": "node --import tsx scripts/benchmark-vector-search.ts",
     "benchmark:retrieval": "node --import tsx scripts/benchmark-retrieval-eval.ts",
+    "benchmark:responses-vs-codex": "node --import tsx scripts/benchmark-responses-vs-codex.ts",
     "start": "node dist/index.js"
   },
   "dependencies": {
