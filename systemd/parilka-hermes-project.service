@@ -1,0 +1,40 @@
+[Unit]
+Description=Parilka Hermes profile projection (memory and skills)
+Documentation=file:%h/repos/parilka-unified/operations/HERMES.md
+# Runs after the maintenance oneshot completes, even when maintenance failed:
+# a partial digest failure must not block the projection pass. Started via the
+# weak Wants dependency of parilka-maintain.service, so a failed projection
+# never fails maintenance either.
+After=parilka-maintain.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/repos/parilka-unified
+EnvironmentFile=-%h/.config/telegram-mcp/.env
+EnvironmentFile=-%h/.config/parilka/parilka.env
+Environment=NODE_ENV=production
+Environment=TELEGRAM_PROJECT_DIR=%h/repos/parilka-unified
+# Kill switch: set PARILKA_HERMES_PROJECTION_ENABLED=true (e.g. in the
+# parilka.env above) only after the Hermes profile is installed. Missing or
+# false skips the pass before any DB or profile access.
+ExecStart=%h/repos/parilka-unified/bin/parilka-hermes-project --apply
+TimeoutStartSec=45min
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+# The shared DB is read-only except for its lock file next to it; the profile
+# path is optional until bootstrap (the leading "-" tolerates its absence).
+ReadWritePaths=%h/.telegram-parilka-mcp -%h/.hermes/profiles/parilka
+ProtectControlGroups=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectClock=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=parilka-hermes-project

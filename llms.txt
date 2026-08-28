@@ -1,54 +1,49 @@
 # parilka-unified
 
-> TypeScript runtime for Parilka: MTProto history owner, durable Telegram Bot
-> API owner, direct OpenAI Responses loop, local SQLite/BGE-M3 retrieval,
-> loopback MCP and digest/Dream jobs. Read `AGENTS.md` first.
+> Единый TypeScript runtime для Parilka: durable Telegram Bot API poller,
+> MTProto history owner, loopback MCP, SQLite state, provider-routed agent и
+> digest jobs. Сначала прочитайте `AGENTS.md`.
 
 ## Start here
 
-- [Agent contract](AGENTS.md): safety, ownership and verification rules.
-- [Architecture index](docs/README.md): current architecture and ADRs.
-- [Operations](operations/README.md): staged preflight, cutover and rollback.
+- [Agent contract](AGENTS.md): safety, architecture boundaries, verification
+  и routing документации.
+- [Architecture index](docs/README.md): стабильный архитектурный канон и ADR.
+- [Operator runbooks](operations/README.md): install, state, logging,
+  migration/cutover/rollback.
 
 ## Runtime owners
 
-- `src/bot/`, `src/bot-daemon/`: durable Bot API lifecycle, direct Responses
-  request loop, direct image input, typing/progress/rich publication and six
-  host-managed read-only history tools.
-- `src/openai-responses/`: narrow official-SDK transport. Bot requests are
-  hard-pinned to `gpt-5.6-luna` and `service_tier: "fast"`, with hosted web
-  search on every bot request.
-- `src/bot/causal-rag/`, `src/vector/`, `src/embeddings.ts`: causal bounded
-  packet plus loopback BGE-M3 dense/sparse retrieval, RRF and local rerank.
-- `src/storage/`: one SQLite connection/transaction kernel and durable state.
-- `src/sync/`, `src/telegram/`: sole MTProto owner, sync and transports.
-- `src/mcp-tools/`, `src/mcp-loopback.ts`: operator MCP and loopback proxy.
-- `src/digest/`, `src/dream/`, `src/digest-cli/`: bounded day/week generation
-  and Dream through the direct Responses maintenance boundary.
-- `src/maintenance/`: retention, FTS/WAL maintenance and integrity checks.
+- `src/bot/`: Bot API ingest, durable turn worker, agent loop и read tools.
+- `src/storage/`: единый SQLite connection/transaction kernel и domain state.
+- `src/sync/`, `src/telegram/`: MTProto ownership, history sync и transports.
+- `src/mcp-tools/`, `src/mcp-loopback.ts`: operator MCP registry и loopback
+  transport.
+- `src/digest/`: day/week planning, generation, hashing, process lock и offline
+  dream memory consolidation.
+- `src/dream/`: per-chat memory consolidator через router role "summary".
+- `src/digest-cli/`: `parilka-digests --apply` запускает digest-фазы и dream-проход.
+- `src/providers/`: model/provider config, hardened HTTP и fallback.
+- `src/vector/`, `src/embeddings.ts`: opt-in embedding index/search.
+- `src/maintenance/`, `src/maintenance-cli.ts`: bounded retention, deferred FTS,
+  WAL checkpoint и schema integrity; `parilka-maintain`.
 
-## Non-negotiable bot boundary
+## Agent workflow
 
-The model has hosted web search/open/find, trusted image input and exactly six
-local read functions: `rag_bm25_search`, `keyword_search`, `read_chat_slice`,
-`day_digest`, `thread_context`, `load_chat_skill`. It has no terminal,
-filesystem mutation, Telegram write or generic host tools. The host injects
-the chat/trigger boundary; a skill load accepts an exact name and only resolves
-the same chat's skill from before `message_id < trigger`.
+- [Detailed rules](.agents/rules/README.md): читать по релевантному trigger.
+- `npm run verify`: полный completion gate; сначала запускайте focused test,
+  затем эту команду перед завершением code slice.
+- [Completed goals](loop-develop/history/): завершённые goal records;
+  001 — unification/deployment evidence.
+- [Loop lifecycle](loop-develop/README.md): current/history и handoff contract.
 
-Dream is nightly tokenless maintenance. Its staged review tools are not live
-Telegram progress; after an atomic successful commit, it may queue one bounded
-permanent public digest for the Bot owner to send. That digest contains only
-changed names/titles/counts, never skill/memory/review content.
+## Optional
 
-## Workflow
+- [Agentic chat systems review](.agents/audit/check-2-agentic-chat-systems.md):
+  primary-source comparison and decisions not to add a second state runtime.
+- Audit/research/rehearsal/deployment evidence goal 001 находится рядом с
+  завершённой записью в `loop-develop/history/001-unified-parilka/`.
 
-- Run focused tests, then `npm run check`, `npm run check:architecture`, shell
-  and systemd checks, build/tests, and `git diff --check` for a completed slice.
-- While the old owner still executes `dist/`, use `npm run verify:responses`;
-  it activates an immutable direct-Responses release only after offline gates.
-- `loop-develop/history/` is immutable historical evidence. In particular,
-  `006-native-codex-cutover` documents the retired Codex deployment; do not
-  treat it as Responses E2E evidence.
-- Direct Responses deployment remains staged until the operator performs the
-  explicit single-owner procedure in [operations/RESPONSES.md](operations/RESPONSES.md).
+## Operations and evidence
+
+- [Migration and rollback](operations/MIGRATION.md).

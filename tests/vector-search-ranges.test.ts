@@ -41,7 +41,7 @@ test("vector hits hydrate exact chunk message ids across empty messages", async 
   );
 });
 
-test("vector range filters trim after windows and exclude before-boundary crossing chunks", async (t) => {
+test("vector range filters trim semantic and hybrid hits to the requested window", async (t) => {
   mockEmbeddingFetch(t);
   const store = new MessageStore(":memory:");
   const vectorRag = new VectorRag(config({ chunkMessages: 3 }), store);
@@ -79,12 +79,12 @@ test("vector range filters trim after windows and exclude before-boundary crossi
     limit: 5,
     includeMessages: true,
   });
-  assert.equal(before.candidateCount, 0);
-  assert.deepEqual(before.hits, []);
-  assert.deepEqual(before.sparseHits, []);
-  // The sole indexed chunk spans ids 1..3. Returning just id 1 after the
-  // fact would still score an embedding built from ids 2 and 3, so strict
-  // causality excludes the crossing chunk before any dense/sparse scoring.
+  assert.deepEqual(before.hits[0]?.chunk.messageIds, [1]);
+  assert.deepEqual(
+    before.hits[0]?.messages.map((message) => message.messageId),
+    [1],
+  );
+  assert.equal(before.hits[0]?.chunk.endMessageId, 1);
 
   const keywordHits = store.searchWithRank({
     chatId: CHAT.chatId,

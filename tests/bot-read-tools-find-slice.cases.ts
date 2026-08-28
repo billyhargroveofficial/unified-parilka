@@ -158,7 +158,7 @@ test("keyword_search projection stays inside its moderate cap", async (t) => {
   assert.ok(MAX_FIND_CHAT_MESSAGES_OUTPUT_CHARS > MAX_BOT_READ_TOOL_OUTPUT_CHARS);
 });
 
-test("read_chat_slice recent 800 paginates in 200-row pages inside the slice cap", async (t) => {
+test("read_chat_slice recent 800 paginates in 300-row pages inside the slice cap", async (t) => {
   const store = new MessageStore(":memory:");
   t.after(() => store.close());
   seed(
@@ -187,8 +187,8 @@ test("read_chat_slice recent 800 paginates in 200-row pages inside the slice cap
   }
   assert.equal(first.status, "done");
   const firstMessages = first.result.messages as Array<Record<string, unknown>>;
-  assert.equal(firstMessages.length, 200);
-  assert.deepEqual(firstMessages[0]?.sourceId, "chat:601");
+  assert.equal(firstMessages.length, 300);
+  assert.deepEqual(firstMessages[0]?.sourceId, "chat:501");
   assert.deepEqual(firstMessages.at(-1)?.sourceId, "chat:800");
   assert.ok(
     firstMessages.every(
@@ -204,8 +204,8 @@ test("read_chat_slice recent 800 paginates in 200-row pages inside the slice cap
   // The authoritative upper is min(trigger - 1, chat max id); here the store
   // ends at 800, so the snapshot freezes 800, never the trigger itself.
   assert.equal(firstCoverage.upperMessageId, 800);
-  assert.equal(firstCoverage.returnedCount, 200);
-  assert.equal(firstCoverage.coveredCount, 200);
+  assert.equal(firstCoverage.returnedCount, 300);
+  assert.equal(firstCoverage.coveredCount, 300);
   assert.equal(firstCoverage.truncated, true);
   assert.equal(firstCoverage.hasMore, true);
   assert.notEqual(firstCoverage.nextCursor, undefined);
@@ -217,7 +217,7 @@ test("read_chat_slice recent 800 paginates in 200-row pages inside the slice cap
   assert.ok(firstSerialized.length <= MAX_READ_CHAT_SLICE_OUTPUT_CHARS);
   assert.equal(first.result.projection, undefined);
 
-  // Follow the frozen snapshot to the end: 800 unique rows in 200-row pages.
+  // Follow the frozen snapshot to the end: 800 unique rows in 300/300/200.
   const seen = new Set<number>();
   for (const item of firstMessages) {
     seen.add(item.messageId as number);
@@ -234,10 +234,10 @@ test("read_chat_slice recent 800 paginates in 200-row pages inside the slice cap
     }
     const pageMessages = page.result.messages as Array<Record<string, unknown>>;
     assert.ok(pageMessages.length > 0);
-    assert.ok(pageMessages.length <= 200);
+    assert.ok(pageMessages.length <= 300);
     const pageCoverage = page.result.coverage as Record<string, unknown>;
     assert.equal(pageCoverage.upperMessageId, 800);
-    assert.equal(pageCoverage.hasMore, (pageCoverage.coveredCount as number) < 800);
+    assert.equal(pageCoverage.hasMore, pageMessages.length === 300);
     assert.equal(page.result.projection, undefined);
     const serialized = JSON.stringify(page);
     assert.ok(serialized.length <= MAX_READ_CHAT_SLICE_OUTPUT_CHARS);
@@ -394,32 +394,28 @@ test("ordinary tools keep the short cap while slice and find carry more", async 
     MAX_FIND_CHAT_MESSAGES_OUTPUT_CHARS >= 16_000 &&
       MAX_FIND_CHAT_MESSAGES_OUTPUT_CHARS <= 24_000,
   );
-  assert.equal(MAX_READ_CHAT_SLICE_OUTPUT_CHARS, 64_000);
+  assert.equal(MAX_READ_CHAT_SLICE_OUTPUT_CHARS, 192_000);
 });
 
-test("read_chat_slice projects a transcript page into the 64k transport budget", async (t) => {
-  const store = new MessageStore(":memory:");
-  t.after(() => store.close());
-  seed(
-    store,
-    Array.from({ length: 300 }, (_, index) => row(index + 1, "т".repeat(1_000))),
-  );
-  const tools = new BotReadTools({
-    chatId: CHAT.chatId,
-    cache: storeCache(store),
-  });
+test("carried tool results keep the slice intact but truncate ordinary output", async () => {
+  const {
+    boundedSerialize,
+    maxCarriedToolResultChars,
+  } = await import("../src/bot/agent/evidence.js");
 
-  const result = await tools.callTool("read_chat_slice", {
-    mode: "recent",
-    count: 300,
-  });
-  assert.equal(result.ok, true);
-  assert.ok(JSON.stringify(result).length <= 64_000);
-  if (result.ok) {
-    assert.deepEqual(result.result.projection, {
-      truncated: true,
-      omittedEvidence: 0,
-      maxCharacters: 64_000,
-    });
-  }
+  assert.equal(maxCarriedToolResultChars("rag_bm25_search"), 4_500);
+  assert.equal(maxCarriedToolResultChars("keyword_search"), 20_000);
+  assert.equal(maxCarriedToolResultChars("read_chat_slice"), 192_000);
+
+  const large = { payload: "x".repeat(90_000) };
+  const ordinary = boundedSerialize(large, maxCarriedToolResultChars("rag_bm25_search"));
+  assert.ok(ordinary.length <= 4_500);
+  assert.doesNotThrow(() => JSON.parse(ordinary));
+  assert.ok(ordinary.includes("output_too_large"));
+
+  const carriedSlice = boundedSerialize(
+    large,
+    maxCarriedToolResultChars("read_chat_slice"),
+  );
+  assert.equal(carriedSlice, JSON.stringify(large));
 });

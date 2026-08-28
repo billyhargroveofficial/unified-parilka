@@ -2,18 +2,21 @@
 Description=Parilka bounded SQLite maintenance and digest generation
 Documentation=file:%h/repos/parilka-unified/README.md
 Documentation=file:%h/repos/parilka-unified/src/maintenance/README.md
-After=parilka-sync.service
+After=parilka-sync.service parilka-bot.service
+# Weak dependency: the Hermes projection oneshot runs after this unit finishes,
+# even when maintenance itself failed (e.g. a partial digest failure). A failed
+# projection must never fail maintenance, hence Wants, not Requires.
+Wants=parilka-hermes-project.service
 
 [Service]
 Type=oneshot
 WorkingDirectory=%h/repos/parilka-unified
-# Maintenance and digest generation use SQLite plus the shared owner-only
-# Codex subscription OAuth state; they must not inherit MTProto credentials.
-EnvironmentFile=%h/.config/parilka/parilka-maintain-codex.env
-# EnvironmentFile= wins over Environment= in systemd. Set the shared state at
-# the final exec seam so the maintenance slice cannot redirect it.
-ExecStart=/usr/bin/env NODE_ENV=production TELEGRAM_PROJECT_DIR=%h/repos/parilka-unified PARILKA_MAINTENANCE_ENTRYPOINT=%h/repos/parilka-unified/.deploy/responses-current/maintenance-cli.js PARILKA_DIGEST_CODEX_AUTH_FILE=%h/.telegram-parilka-mcp/codex-subscription/auth.json %h/repos/parilka-unified/bin/parilka-maintain --apply
-ExecStart=/usr/bin/env NODE_ENV=production TELEGRAM_PROJECT_DIR=%h/repos/parilka-unified PARILKA_DIGEST_ENTRYPOINT=%h/repos/parilka-unified/.deploy/responses-current/digest-cli.js PARILKA_DIGEST_CODEX_AUTH_FILE=%h/.telegram-parilka-mcp/codex-subscription/auth.json %h/repos/parilka-unified/bin/parilka-digests --apply --summary-only
+EnvironmentFile=-%h/.config/telegram-mcp/.env
+EnvironmentFile=-%h/.config/parilka/parilka.env
+Environment=NODE_ENV=production
+Environment=TELEGRAM_PROJECT_DIR=%h/repos/parilka-unified
+ExecStart=%h/repos/parilka-unified/bin/parilka-maintain --apply
+ExecStart=%h/repos/parilka-unified/bin/parilka-digests --apply --summary-only
 TimeoutStartSec=45min
 UMask=0077
 NoNewPrivileges=true

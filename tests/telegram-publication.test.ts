@@ -68,32 +68,7 @@ test("production-shaped orphan separator with nine columns becomes multiline rec
       "- b9",
     ].join("\n"),
   );
-  assert.equal(
-    publication.plainText,
-    [
-      "1.",
-      "- a1",
-      "- a2",
-      "- a3",
-      "- a4",
-      "- a5",
-      "- a6",
-      "- a7",
-      "- a8",
-      "- a9",
-      "",
-      "2.",
-      "- b1",
-      "- b2",
-      "- b3",
-      "- b4",
-      "- b5",
-      "- b6",
-      "- b7",
-      "- b8",
-      "- b9",
-    ].join("\n"),
-  );
+  assert.equal(publication.plainText, publication.markdown);
   assert.ok(!publication.markdown.includes("|"));
   assert.ok(!publication.markdown.includes("---"));
   assert.equal(
@@ -284,21 +259,7 @@ test("valid compact GFM tables with 2-4 columns stay byte-identical", () => {
 
   assert.equal(publication.mode, "rich");
   assert.equal(publication.markdown, text);
-  assert.equal(
-    publication.plainText,
-    [
-      "Сравнение",
-      "",
-      "Модель · Цена",
-      "- A · 10",
-      "",
-      "Модель · Цена · Наличие · Гарантия",
-      "- A · 10 · да · 1 год",
-      "- B · 20 · нет · 2 года",
-      "",
-      "Финал.",
-    ].join("\n"),
-  );
+  assert.equal(publication.plainText, text);
 });
 
 test("valid wide tables become labeled mobile-friendly record blocks", () => {
@@ -333,26 +294,7 @@ test("valid wide tables become labeled mobile-friendly record blocks", () => {
       "- Диск: 1024",
     ].join("\n"),
   );
-  assert.equal(
-    publication.plainText,
-    [
-      "Смотрим конфиги:",
-      "",
-      "1.",
-      "- Имя: A",
-      "- Цена: 10",
-      "- CPU: x",
-      "- RAM: 8",
-      "- Диск: 512",
-      "",
-      "2.",
-      "- Имя: B",
-      "- Цена: 20",
-      "- CPU: y",
-      "- RAM: 16",
-      "- Диск: 1024",
-    ].join("\n"),
-  );
+  assert.equal(publication.plainText, publication.markdown);
   assert.ok(!publication.markdown.includes("|"));
 });
 
@@ -420,7 +362,7 @@ test("headerless fallback keeps short rows compact and blocks wide rows", () => 
   );
 });
 
-test("Markdown fallback keeps code and prose visible while removing presentation syntax", () => {
+test("fenced code, blockquotes, inline code and pipe prose stay untouched", () => {
   const text = [
     "```sql",
     "SELECT '|' FROM t;",
@@ -436,18 +378,7 @@ test("Markdown fallback keeps code and prose visible while removing presentation
 
   assert.equal(publication.mode, "rich");
   assert.equal(publication.markdown, text);
-  assert.equal(
-    publication.plainText,
-    [
-      "SELECT '|' FROM t;",
-      "| --- | --- |",
-      "",
-      "| a | b |",
-      "| --- | --- |",
-      "",
-      "Формат a | b не таблица, а |код| тем более.",
-    ].join("\n"),
-  );
+  assert.equal(publication.plainText, text);
 });
 
 test("escaped pipes never split prose into table cells", () => {
@@ -480,5 +411,5 @@ test("normalization that crosses the byte limit falls back to plain", () => {
   assert.ok(utf8Length(text) > TELEGRAM_RICH_TEXT_LIMIT_UTF8);
   const publication = createTelegramPublication(text);
   assert.equal(publication.mode, "plain");
-  assert.ok(publication.plainText.endsWith("Имя · Цена\n- A · 10"));
+  assert.ok(publication.plainText.endsWith(table));
 });

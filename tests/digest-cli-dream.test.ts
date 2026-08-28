@@ -3,9 +3,7 @@ import { test } from "node:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runDigestCli, type RunDigestCliDeps } from "../src/digest-cli/run.js";
-import type { SummaryTextRunner } from "../src/digest/summary-text-port.js";
-import type { DreamTextRunner } from "../src/dream/text-runner.js";
+import { runDigestCli } from "../src/digest-cli/run.js";
 import { SCHEMA_VERSION } from "../src/storage/constants.js";
 import { MessageStore } from "../src/store.js";
 import {
@@ -13,6 +11,8 @@ import {
   DREAM_BOT_SENDER_ID,
   DREAM_CHAT_ID,
 } from "./support/dream.js";
+
+const MODEL_KEY_ENV = "PARILKA_DREAM_CLI_TEST_KEY";
 
 function capturedOutput(): {
   output: Pick<NodeJS.Process, "stdout" | "stderr">;
@@ -42,11 +42,45 @@ function capturedOutput(): {
   };
 }
 
+/**
+ * Local loopback model-router fixture. Empty Dream days never start a model
+ * call, so the base URL is configured but never dialed.
+ */
+function writeLocalModelRouterFixture(path: string): void {
+  writeFileSync(
+    path,
+    `${JSON.stringify(
+      {
+        allowInsecureLocal: true,
+        providers: [
+          {
+            id: "localdream",
+            protocol: "openai",
+            baseUrl: "http://127.0.0.1:9/v1",
+            apiKeyEnv: MODEL_KEY_ENV,
+          },
+        ],
+        modelCapabilities: {
+          "localdream:dream-test": { vision: false },
+        },
+        roles: {
+          turn: ["localdream:dream-test"],
+          summary: ["localdream:dream-test"],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+}
+
 test("runDigestCli wires the injected logger through a real Dream pass", async () => {
   const directory = mkdtempSync(join(tmpdir(), "parilka-digest-cli-dream-"));
   const dbPath = join(directory, "shared.sqlite");
-  const authPath = join(directory, "codex-auth.json");
-  writeFileSync(authPath, "{}\n", { mode: 0o600 });
+  const modelConfigPath = join(directory, "model-router.json");
+  const previousKeyValue = process.env[MODEL_KEY_ENV];
+  process.env[MODEL_KEY_ENV] = "local-fixture-key";
   const { logger, events } = capturingDreamLogger();
   const { output, stdoutText, stderrText } = capturedOutput();
   try {
@@ -60,6 +94,8 @@ test("runDigestCli wires the injected logger through a real Dream pass", async (
       isForum: false,
     });
     setup.close();
+    writeLocalModelRouterFixture(modelConfigPath);
+
     const exitCode = await runDigestCli(
       [
         "--apply",
@@ -68,14 +104,14 @@ test("runDigestCli wires the injected logger through a real Dream pass", async (
         DREAM_CHAT_ID,
         "--db",
         dbPath,
+        "--model-config",
+        modelConfigPath,
         "--bot-id",
         DREAM_BOT_SENDER_ID,
       ],
-      {
-        PARILKA_DIGEST_CODEX_AUTH_FILE: authPath,
-      },
+      {},
       output,
-      { logger, createResponsesRunner: fakeResponsesRunners },
+      { logger },
     );
 
     assert.equal(stderrText(), "");
@@ -120,64 +156,11 @@ test("runDigestCli wires the injected logger through a real Dream pass", async (
       verify.close();
     }
   } finally {
+    if (previousKeyValue === undefined) {
+      delete process.env[MODEL_KEY_ENV];
+    } else {
+      process.env[MODEL_KEY_ENV] = previousKeyValue;
+    }
     rmSync(directory, { recursive: true, force: true });
   }
 });
-
-test("dry-run does not require a Responses credential or construct its runner", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "parilka-digest-cli-dry-run-"));
-  const dbPath = join(directory, "shared.sqlite");
-  const { output, stderrText } = capturedOutput();
-  let constructed = 0;
-  try {
-    const setup = new MessageStore(dbPath);
-    setup.upsertChat({
-      chatId: DREAM_CHAT_ID,
-      requested: DREAM_CHAT_ID,
-      title: "Digest CLI Dry Run Test",
-      kind: "channel",
-      isForum: false,
-    });
-    setup.close();
-
-    const exitCode = await runDigestCli(
-      ["--chat", DREAM_CHAT_ID, "--db", dbPath],
-      {},
-      output,
-      {
-        createResponsesRunner: () => {
-          constructed += 1;
-          throw new Error("must not construct Responses in dry-run");
-        },
-      },
-    );
-
-    assert.equal(exitCode, 0);
-    assert.equal(stderrText(), "");
-    assert.equal(constructed, 0);
-  } finally {
-    rmSync(directory, { recursive: true, force: true });
-  }
-});
-
-const fakeResponsesRunners: NonNullable<RunDigestCliDeps["createResponsesRunner"]> = () => {
-  const runner = {
-    async runText(options: Parameters<SummaryTextRunner["runText"]>[0] | Parameters<DreamTextRunner["runText"]>[0]) {
-      if ("dynamicTools" in options) {
-        return {
-          text: "unused",
-          finishReason: "stop",
-          toolCalls: 0,
-          model: "gpt-5.6-luna",
-          providerId: "openai-responses",
-        };
-      }
-      return {
-        text: "unused",
-        model: "gpt-5.6-luna",
-        providerId: "openai-responses",
-      };
-    },
-  } as SummaryTextRunner & DreamTextRunner;
-  return { summary: runner, dream: runner };
-};

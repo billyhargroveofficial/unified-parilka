@@ -3,36 +3,11 @@ set -euo pipefail
 umask 077
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-configured_project_dir="${TELEGRAM_PROJECT_DIR:-$script_dir/..}"
-project_dir="$(cd -- "$configured_project_dir" && pwd -P)"
+project_dir="${TELEGRAM_PROJECT_DIR:-$(cd -- "$script_dir/.." && pwd)}"
 cd "$project_dir"
 
-parilka_resolve_entrypoint() {
-  local env_name="$1" requested="$2" default_path="$3" current_pointer="$4" expected_name="$5"
-  local releases_dir="$project_dir/.deploy/responses-releases" resolved_pointer relative_release expected_path resolved_path
-  if [[ "$requested" == "$default_path" ]]; then
-    if [[ -L "$requested" || ( -e "$requested" && ! -f "$requested" ) ]]; then echo "$env_name default entrypoint must be a regular non-symlink file" >&2; exit 78; fi
-    realpath -m -- "$requested"; return
-  fi
-  if [[ "$requested" != "$current_pointer/$expected_name" ]]; then echo "$env_name must be the default build or the exact active Responses release entrypoint" >&2; exit 78; fi
-  if [[ ! -L "$current_pointer" ]]; then echo "Responses current pointer must be a symbolic link" >&2; exit 78; fi
-  resolved_pointer="$(realpath -e -- "$current_pointer")" || { echo "Responses current pointer must resolve to a release directory" >&2; exit 78; }
-  relative_release="${resolved_pointer#"$releases_dir"/}"
-  if [[ "$resolved_pointer" == "$releases_dir" || "$relative_release" == "$resolved_pointer" || "$relative_release" == */* || ! "$relative_release" =~ ^[0-9]+-[0-9]+-[0-9a-f]{12}$ ]]; then echo "Responses current pointer must resolve to one versioned release" >&2; exit 78; fi
-  expected_path="$resolved_pointer/$expected_name"
-  resolved_path="$(realpath -e -- "$requested")" || { echo "$env_name active Responses release entrypoint is missing" >&2; exit 78; }
-  if [[ "$resolved_path" != "$expected_path" || -L "$resolved_path" || ! -f "$resolved_path" ]]; then echo "$env_name active Responses release entrypoint must be its exact regular file" >&2; exit 78; fi
-  if [[ -n "$(find -P "$resolved_pointer" -type l -print -quit)" ]]; then echo "Responses release tree must not contain symbolic links" >&2; exit 78; fi
-  printf '%s\n' "$resolved_path"
-}
-
-default_entrypoint="$project_dir/dist/maintenance-cli.js"
-release_pointer="$project_dir/.deploy/responses-current"
-entrypoint="${PARILKA_MAINTENANCE_ENTRYPOINT:-$default_entrypoint}"
-
-resolved_entrypoint="$(parilka_resolve_entrypoint \
-  "PARILKA_MAINTENANCE_ENTRYPOINT" "$entrypoint" "$default_entrypoint" "$release_pointer" "maintenance-cli.js")"
-"$project_dir/bin/telegram-parilka-mcp-check-build" "$project_dir" "$resolved_entrypoint"
+entrypoint="$project_dir/dist/maintenance-cli.js"
+"$project_dir/bin/telegram-parilka-mcp-check-build" "$project_dir" "$entrypoint"
 
 node_bin="${TELEGRAM_NODE:-node}"
 state_db="${TELEGRAM_DB_PATH:-${PARILKA_BOT_DB_PATH:-$HOME/.telegram-parilka-mcp/messages.sqlite}}"
@@ -45,6 +20,6 @@ for argument in "$@"; do
 done
 
 if (( has_db )); then
-  exec "$node_bin" "$resolved_entrypoint" "$@"
+  exec "$node_bin" "$entrypoint" "$@"
 fi
-exec "$node_bin" "$resolved_entrypoint" --db "$state_db" "$@"
+exec "$node_bin" "$entrypoint" --db "$state_db" "$@"

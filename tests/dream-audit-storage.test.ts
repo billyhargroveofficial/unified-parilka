@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
+import { SCHEMA_VERSION } from "../src/storage/constants.js";
 import { MessageStore } from "../src/store.js";
 import {
   DREAM_CHAT_ID,
@@ -155,7 +156,7 @@ test("cross-chat audit isolation", () => {
 
 // ── Schema migration ──────────────────────────────────────────────────────
 
-test("v21 fixture migrates to v23, preserves data, idempotent reopen", (t) => {
+test("v21 fixture migrates to the current schema, preserves data, idempotent reopen", (t) => {
   const dbPath = tempDbPath(t);
   const v21 = new MessageStore(dbPath);
   v21.upsertChat({ chatId: DREAM_CHAT_ID, requested: DREAM_CHAT_ID, title: "T", kind: "channel", isForum: false });
@@ -170,7 +171,7 @@ test("v21 fixture migrates to v23, preserves data, idempotent reopen", (t) => {
   raw.close();
 
   const migrated = new MessageStore(dbPath);
-  assert.equal(migrated.getSchemaVersion(), 24);
+  assert.equal(migrated.getSchemaVersion(), SCHEMA_VERSION);
   assert.equal(migrated.getChatMemory(DREAM_CHAT_ID)?.memoryText, "pre");
   assert.equal(migrated.listFastChatMemory(DREAM_CHAT_ID).length, 1);
   migrated.commitDreamDay({
@@ -181,15 +182,15 @@ test("v21 fixture migrates to v23, preserves data, idempotent reopen", (t) => {
   migrated.close();
 
   const again = new MessageStore(dbPath);
-  assert.equal(again.getSchemaVersion(), 24);
+  assert.equal(again.getSchemaVersion(), SCHEMA_VERSION);
   again.close();
 });
 
-test("v23 read-only open", (t) => {
+test("current schema read-only open", (t) => {
   const dbPath = tempDbPath(t);
   new MessageStore(dbPath).close();
   const ro = new MessageStore(dbPath, { readOnly: true });
-  try { assert.equal(ro.getSchemaVersion(), 24); } finally { ro.close(); }
+  try { assert.equal(ro.getSchemaVersion(), SCHEMA_VERSION); } finally { ro.close(); }
 });
 
 test("PRAGMA quick_check ok", (t) => {

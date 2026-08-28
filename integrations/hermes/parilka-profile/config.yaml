@@ -1,0 +1,277 @@
+model:
+  default: gpt-5.6-luna
+  provider: openai-codex
+agent:
+  max_turns: 500
+  service_tier: fast
+  disabled_toolsets:
+    - bfl
+    - clarify
+    - code_execution
+    - computer_use
+    - context_engine
+    - cronjob
+    - discord
+    - discord_admin
+    - feishu_doc
+    - feishu_drive
+    - file
+    - homeassistant
+    - image_gen
+    - kanban
+    - project
+    - spotify
+    - stt
+    - telegram-parilka
+    - terminal
+    - todo
+    - video
+    - video_gen
+    - x_search
+    - yuanbao
+  reasoning_effort: max
+web:
+  search_backend: codex-native
+  extract_backend: lightpanda-local
+  keyless_rescue: false
+  codex_native:
+    model: gpt-5.6-luna
+    reasoning: low
+    search_context_size: medium
+    timeout_seconds: 120
+    profile_prompt_cache: true
+  lightpanda_local:
+    binary: /home/billy/.cache/lightpanda-node/lightpanda
+    timeout_seconds: 18
+    connect_timeout_ms: 5000
+    http_timeout_ms: 8000
+    terminate_ms: 12000
+browser:
+  backend: browser-use
+  inactivity_timeout: 1800
+  headed: true
+  cdp_url: http://127.0.0.1:9222
+tool_loop_guardrails:
+  warnings_enabled: false
+  loop_caps:
+    max_web_searches: 0
+    max_subagents: 0
+auxiliary:
+  title_generation:
+    enabled: false
+display:
+  busy_input_mode: queue
+  # Native footer is intentionally off: parilka_chat adds the compact,
+  # model-aware footer after a completed Telegram turn.
+  runtime_footer:
+    enabled: false
+  platforms:
+    telegram:
+      streaming: false
+      busy_input_mode: queue
+      interim_assistant_messages: true
+      tool_progress: all
+      tool_progress_grouping: accumulate
+      cleanup_progress: true
+      busy_ack_detail: false
+  long_running_notifications: true
+  busy_ack_detail: false
+  tool_progress: 'off'
+dashboard:
+  theme: midnight
+  font: source-serif
+tts:
+  provider: openai
+  openai:
+    model: silero
+    voice: xenia
+    base_url: http://127.0.0.1:8100/v1
+    api_key: local
+    language: ru
+  use_gateway: false
+stt:
+  language: ru
+  openai:
+    model: flov-whisper
+    base_url: http://127.0.0.1:17432/v1
+    api_key: flov-local
+  provider: openai
+  use_gateway: false
+memory:
+  user_profile_enabled: false
+  memory_char_limit: 8000
+  nudge_interval: 0
+skills:
+  creation_nudge_interval: 10
+  disabled:
+    - baoyu-infographic
+telegram:
+  allowed_chats:
+    - '-1003179772905'
+  extra:
+    rich_messages: true
+    commands_enabled: false
+    markdown_documents_only: true
+  require_mention: true
+  mention_patterns: []
+  observe_unmentioned_group_messages: false
+  exclusive_bot_mentions: true
+  reply_to_mode: first
+  gateway_restart_notification: false
+  group_allowed_chats:
+    - '-1003179772905'
+  unauthorized_dm_behavior: ignore
+tools:
+  tool_search:
+    enabled: 'off'
+model_catalog:
+  excluded_providers:
+    - anthropic
+    - copilot
+    - copilot-acp
+    - deepseek
+    - gemini
+    - kimi-coding
+    - minimax-oauth
+    - nous
+    - openai
+    - openai-api
+    - openrouter
+    - qwen-oauth
+    - vertex
+    - xai
+    - xai-oauth
+    - zai
+model_overrides:
+  openai-codex:
+    gpt-5.6-sol:
+      context_window: 272000
+    gpt-5.6-terra:
+      context_window: 272000
+    gpt-5.6-luna:
+      context_window: 272000
+    gpt-5.5:
+      context_window: 272000
+    gpt-5.4:
+      context_window: 272000
+    gpt-5.4-mini:
+      context_window: 272000
+    gpt-5.3-codex:
+      context_window: 272000
+    gpt-5.3-codex-spark:
+      context_window: 128000
+onboarding:
+  seen:
+    profile_build_offered: true
+    busy_input_prompt: true
+_config_version: 38
+group_sessions_per_user: false
+platform_toolsets:
+  telegram:
+    - parilka_chat
+    - memory
+    - skills
+    - web
+    - vision
+    - session_search
+    - tts
+  cli:
+    - browser
+    - memory
+    - session_search
+    - skills
+    - vision
+    - web
+    - tts
+known_plugin_toolsets:
+  telegram:
+    - parilka_chat
+    - spotify
+  cli:
+    - a2a
+    - spotify
+mcp_servers:
+  telegram-parilka:
+    command: /home/billy/repos/parilka-unified/bin/telegram-parilka-mcp
+    env:
+      PARILKA_MCP_HTTP_URL: http://127.0.0.1:8766/mcp
+    tools:
+      include:
+        - rag_bm25_search
+        - keyword_search
+        - read_chat_slice
+        - day_digest
+        - thread_context
+plugins:
+  enabled:
+    - parilka-chat
+    - dashboard_auth/basic
+    - web/codex-native
+    - web/lightpanda-local
+  entries:
+    parilka-chat:
+      enabled: true
+known_builtin_toolsets:
+  cli:
+    - browser
+    - clarify
+    - code_execution
+    - computer_use
+    - context_engine
+    - cronjob
+    - delegation
+    - discord
+    - discord_admin
+    - file
+    - homeassistant
+    - memory
+    - session_search
+    - skills
+    - spotify
+    - stt
+    - terminal
+    - todo
+    - tts
+    - video
+    - video_gen
+    - vision
+    - web
+    - yuanbao
+
+# ── Security ──────────────────────────────────────────────────────────
+# Secret redaction is ON by default — strings that look like API keys,
+# tokens, and passwords are masked in tool output, logs, and chat
+# responses before the model or user ever sees them. Set redact_secrets
+# to false to disable (e.g. when developing the redactor itself).
+# tirith pre-exec scanning is enabled by default when the tirith binary
+# is available. Configure via security.tirith_* keys or env vars
+# (TIRITH_ENABLED, TIRITH_BIN, TIRITH_TIMEOUT, TIRITH_FAIL_OPEN).
+#
+# security:
+#   redact_secrets: true
+#   tirith_enabled: true
+#   tirith_path: "tirith"
+#   tirith_timeout: 5
+#   tirith_fail_open: true
+
+# ── Fallback Model ────────────────────────────────────────────────────
+# Automatic provider failover when primary is unavailable.
+# Uncomment and configure to enable. Triggers on rate limits (429),
+# overload (529), service errors (503), or connection failures.
+#
+# Supported providers:
+#   openrouter   (OPENROUTER_API_KEY)  — routes to any model
+#   openai-codex (OAuth — hermes auth) — OpenAI Codex
+#   nous         (OAuth — hermes auth) — Nous Portal
+#   zai          (ZAI_API_KEY)         — Z.AI / GLM
+#   kimi-coding  (KIMI_API_KEY)        — Kimi / Moonshot
+#   kimi-coding-cn (KIMI_CN_API_KEY)   — Kimi / Moonshot (China)
+#   minimax      (MINIMAX_API_KEY)     — MiniMax
+#   minimax-cn   (MINIMAX_CN_API_KEY)  — MiniMax (China)
+#   bedrock      (AWS IAM / boto3)     — AWS Bedrock (Converse API)
+#
+# For custom OpenAI-compatible endpoints, add base_url and key_env.
+#
+# fallback_model:
+#   provider: openrouter
+#   model: anthropic/claude-sonnet-4

@@ -35,7 +35,6 @@ export function isAgentFinal(value: unknown): value is BotAgentFinalResult {
   if (
     typeof telemetry.finalModelId !== "string" ||
     typeof telemetry.finalProviderId !== "string" ||
-    !isOptionalEffectiveServiceTier(telemetry.serviceTier) ||
     !isOptionalString(telemetry.reasoningMode) ||
     !Array.isArray(telemetry.steps) ||
     !isOptionalNonNegativeInteger(telemetry.totalInputTokens) ||
@@ -71,10 +70,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isOptionalString(value: unknown): value is string | undefined {
   return value === undefined || typeof value === "string";
-}
-
-function isOptionalEffectiveServiceTier(value: unknown): value is "fast" | "priority" | undefined {
-  return value === undefined || value === "fast" || value === "priority";
 }
 
 function isOptionalNonNegativeInteger(
@@ -114,12 +109,6 @@ export function safeErrorCode(error: unknown): string {
     }
   }
   return "unknown_error";
-}
-
-/** Agent errors retry by default; an explicit false is a terminal contract. */
-export function isRetryableAgentError(error: unknown): boolean {
-  return !(error != null && typeof error === "object" &&
-    (error as { retryable?: unknown }).retryable === false);
 }
 
 export function safeMachineCode(value: string, fallback: string): string {

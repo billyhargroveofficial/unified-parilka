@@ -19,8 +19,7 @@ export interface CliOptions {
   chatId: string;
   dbPath: string;
   botId: string;
-  /** Present only for apply: dry-run must not read a credential or construct Responses. */
-  responses?: ResponsesDigestCliOptions;
+  modelConfigPath?: string;
   maxInputChars?: number;
   maxOutputChars?: number;
   itemTimeoutMs?: number;
@@ -30,17 +29,6 @@ export interface CliOptions {
   maxWeekGenerationsPerRun: number;
   memoryMaxChars: number;
 }
-
-export interface ResponsesDigestCliOptions {
-  /** Absolute, owner-only Codex subscription OAuth cache. */
-  authFile: string;
-  model: "gpt-5.6-luna";
-  /** Logical Fast tier; shared subscription transport maps it to wire priority. */
-  serviceTier: "fast";
-}
-
-const DIGEST_RESPONSES_MODEL = "gpt-5.6-luna" as const;
-const DIGEST_RESPONSES_SERVICE_TIER = "fast" as const;
 
 export function parseOptions(
   argv: readonly string[],
@@ -73,6 +61,7 @@ export function parseOptions(
       "--chat",
       "--db",
       "--bot-id",
+      "--model-config",
       "--max-input-chars",
       "--max-output-chars",
       "--item-timeout-ms",
@@ -130,10 +119,24 @@ export function parseOptions(
   assertSingleLinkDatabase(dbPath);
   assertSharedDatabaseIdentity(dbPath, env);
 
+  const configuredModel =
+    values.get("--model-config") ??
+    env.PARILKA_DIGEST_MODEL_CONFIG_PATH ??
+    env.PARILKA_BOT_MODEL_CONFIG_PATH;
+  const modelConfigPath = configuredModel
+    ? existingAbsoluteFile(configuredModel, "model router config")
+    : undefined;
+  if (apply && !modelConfigPath) {
+    throw new CliConfigError(
+      "missing_model_config",
+      "Apply mode requires --model-config, PARILKA_DIGEST_MODEL_CONFIG_PATH, or PARILKA_BOT_MODEL_CONFIG_PATH.",
+    );
+  }
+
   const botIdValue =
     values.get("--bot-id") ?? env.PARILKA_BOT_ID;
   const botId = botIdValue ? telegramBotId(botIdValue) : "";
-  if (apply && botId === "") {
+  if (apply && modelConfigPath && botId === "") {
     throw new CliConfigError(
       "missing_bot_id",
       "Dream mode requires --bot-id or PARILKA_BOT_ID to the application bot Telegram user id.",
@@ -148,7 +151,7 @@ export function parseOptions(
     chatId,
     dbPath,
     botId,
-    ...(apply ? { responses: parseResponsesOptions(env) } : {}),
+    modelConfigPath,
     maxInputChars: integerOption(
       values.get("--max-input-chars") ??
         env.PARILKA_DIGEST_MAX_INPUT_CHARS,
@@ -210,40 +213,6 @@ export function parseOptions(
   };
 
   return options;
-}
-
-function parseResponsesOptions(
-  env: Readonly<Record<string, string | undefined>>,
-): ResponsesDigestCliOptions {
-  const authFile = requiredAbsolutePath(
-    env.PARILKA_DIGEST_CODEX_AUTH_FILE,
-    "PARILKA_DIGEST_CODEX_AUTH_FILE",
-    "missing_codex_auth_file",
-  );
-  return {
-    authFile,
-    model: DIGEST_RESPONSES_MODEL,
-    serviceTier: DIGEST_RESPONSES_SERVICE_TIER,
-  };
-}
-
-function requiredAbsolutePath(
-  value: string | undefined,
-  name: string,
-  code: string,
-): string {
-  if (!value?.trim()) {
-    throw new CliConfigError(code, `${name} must be configured for apply mode.`);
-  }
-  return absolutePath(value, name);
-}
-
-function absolutePath(value: string, name: string): string {
-  const expanded = expandHome(value.trim());
-  if (!isAbsolute(expanded)) {
-    throw new CliConfigError("path_not_absolute", `${name} path must be absolute.`);
-  }
-  return resolve(expanded);
 }
 
 function telegramChatId(value: string | undefined): string {

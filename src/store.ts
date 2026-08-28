@@ -8,10 +8,6 @@ import { StoreCore } from "./storage/core.js";
 import { DigestMethods, type DigestApi } from "./storage/digests.js";
 import { DreamCommitMethods, type DreamCommitApi } from "./storage/dream-commit.js";
 import { DreamDaysMethods, type DreamDaysApi } from "./storage/dream-days.js";
-import {
-  DreamPublicationsMethods,
-  type DreamPublicationsApi,
-} from "./storage/dream-publications.js";
 import { DreamAuditMethods, type DreamAuditApi } from "./storage/dream-audit.js";
 import { MemoryMethods, type MemoryApi } from "./storage/memory.js";
 import { EmbeddingMethods, type EmbeddingApi } from "./storage/embeddings.js";
@@ -80,7 +76,6 @@ export interface MessageStore
     BotTurnApi,
     DigestApi,
     DreamDaysApi,
-    DreamPublicationsApi,
     DreamCommitApi,
     DreamAuditApi,
     EmbeddingApi,
@@ -123,7 +118,6 @@ const domains = [
   BotTurnMethods,
   DigestMethods,
   DreamDaysMethods,
-  DreamPublicationsMethods,
   DreamCommitMethods,
   DreamAuditMethods,
   EmbeddingMethods,

@@ -3,16 +3,6 @@
 - Статус решения: принято
 - Дата решения: 2026-08-06
 
-## Addendum 2026-08-27: production deployment
-
-Оператор отдельно одобрил и включил поставляемый
-`parilka-bge-m3.service`; он live на loopback `127.0.0.1:8767`, health
-`ok`, contract `bge-m3-v1`, а штатный sync подтвердил completed embedding
-batches. Утверждения ниже про disabled unit и пустой индекс фиксируют
-pre-deployment snapshot исходного решения, а не current runtime. BGE остаётся
-optional dependency без жёсткого systemd `Requires=`: при его недоступности
-retrieval видимо деградирует до BM25.
-
 ## Контекст
 
 Исторический retrieval использовал внешний OpenAI-совместимый dense

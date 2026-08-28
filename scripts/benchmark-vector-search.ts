@@ -3,12 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import {
-  blobToVector,
-  cosineSimilarity,
-  createBlobCosineScorer,
-  vectorToBlob,
-} from "../src/embeddings.js";
+import { cosineSimilarity } from "../src/embeddings.js";
 import { MessageStore } from "../src/store.js";
 
 const candidateCount = intArg("--candidates", 20_000);
@@ -20,8 +15,6 @@ const coverageTargetMs = intArg("--coverage-target-ms", 2_000);
 
 if (coverageMessages > 0) {
   runCoverageBenchmark(coverageMessages, coverageTargetMs);
-} else if (process.argv.includes("--blob-hot-path")) {
-  runBlobHotPathBenchmark();
 } else {
   runVectorBenchmark();
 }
@@ -68,76 +61,6 @@ function runVectorBenchmark(): void {
   if (!ok) {
     process.exitCode = 1;
   }
-}
-
-/**
- * Regression microbenchmark for the production dense BLOB path. It reports
- * the retired copy/decode+cosine path alongside the one-pass scorer so a
- * candidate-cap increase can be evaluated without involving SQLite I/O.
- */
-function runBlobHotPathBenchmark(): void {
-  const query = normalizedVector(dimensions, 1);
-  const blobs = Array.from(
-    { length: candidateCount },
-    (_, index) => vectorToBlob(Array.from(normalizedVector(dimensions, index + 2))),
-  );
-  const scoreBlob = createBlobCosineScorer(query);
-  const directDurations: number[] = [];
-  const legacyDurations: number[] = [];
-
-  // Let V8 optimize both loops before recording timings.
-  scoreAllBlobs(blobs, (blob) => scoreBlob(blob, dimensions));
-  scoreAllBlobs(blobs, (blob) => cosineSimilarity(query, blobToVector(blob, dimensions)));
-  for (let run = 0; run < runs; run += 1) {
-    let started = performance.now();
-    scoreAllBlobs(blobs, (blob) => scoreBlob(blob, dimensions));
-    directDurations.push(performance.now() - started);
-
-    started = performance.now();
-    scoreAllBlobs(blobs, (blob) => cosineSimilarity(query, blobToVector(blob, dimensions)));
-    legacyDurations.push(performance.now() - started);
-  }
-
-  directDurations.sort((left, right) => left - right);
-  legacyDurations.sort((left, right) => left - right);
-  const directP95 = percentile95(directDurations);
-  const legacyP95 = percentile95(legacyDurations);
-  const ok = directP95 <= targetP95Ms;
-  console.log(
-    JSON.stringify(
-      {
-        ok,
-        candidateCount,
-        dimensions,
-        runs,
-        targetP95Ms,
-        directOnePassBlobP95Ms: Number(directP95.toFixed(2)),
-        legacyCopyDecodeP95Ms: Number(legacyP95.toFixed(2)),
-        speedup: Number((legacyP95 / directP95).toFixed(2)),
-        rssMb: Number((process.memoryUsage().rss / (1024 * 1024)).toFixed(2)),
-        note: "Synthetic dense BLOB scoring only; excludes SQLite row fetch and ranked-hit hydration.",
-      },
-      null,
-      2,
-    ),
-  );
-  if (!ok) process.exitCode = 1;
-}
-
-function scoreAllBlobs(
-  blobs: readonly Uint8Array[],
-  score: (blob: Uint8Array) => number,
-): number {
-  let best = -Infinity;
-  for (const blob of blobs) {
-    const value = score(blob);
-    if (value > best) best = value;
-  }
-  return best;
-}
-
-function percentile95(durations: readonly number[]): number {
-  return durations[Math.max(0, Math.ceil(durations.length * 0.95) - 1)] ?? 0;
 }
 
 function runCoverageBenchmark(messageCount: number, targetMs: number): void {

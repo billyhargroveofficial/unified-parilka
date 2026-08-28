@@ -235,6 +235,11 @@ export function loadConfig(): AppConfig {
         "PARILKA_MEMORY_MAX_CHARS",
       ),
     },
+    hermesProjection: {
+      enabled: boolFromEnv(
+        "PARILKA_HERMES_PROJECTION_ENABLED",
+      ),
+    },
   };
 
   validateConfig(config);

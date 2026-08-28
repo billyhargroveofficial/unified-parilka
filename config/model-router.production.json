@@ -1,0 +1,26 @@
+{
+  "allowInsecureLocal": false,
+  "providers": [
+    {
+      "id": "deepseek",
+      "protocol": "deepseek",
+      "baseUrl": "https://api.deepseek.com",
+      "apiKeyEnv": "PARILKA_DEEPSEEK_API_KEY",
+      "thinkingMode": "enabled"
+    }
+  ],
+  "modelCapabilities": {
+    "deepseek:deepseek-v4-flash": {
+      "vision": false,
+      "contextWindowTokens": 1000000
+    }
+  },
+  "roles": {
+    "turn": [
+      "deepseek:deepseek-v4-flash"
+    ],
+    "summary": [
+      "deepseek:deepseek-v4-flash"
+    ]
+  }
+}

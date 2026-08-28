@@ -1,3 +1,5 @@
+import { ModelRoutingError } from "../providers/model-router.js";
+
 const MACHINE_CODE = /^[a-zA-Z0-9_.:-]{1,120}$/;
 const PURE_NUMERIC = /^\d+$/;
 const MAX_DIAGNOSTIC_CHARS = 240;
@@ -6,14 +8,17 @@ const MAX_DIAGNOSTIC_CHARS = 240;
  * Persistable, secret-free machine diagnostic for Dream job rows and run
  * reports. Provider messages and free-form exception text are never returned.
  *
+ * ModelRoutingError becomes:
+ *   `<routerCode>:<lastAttemptDecisionReason>:<preferredMachineCode>`
+ * e.g. `candidates_exhausted:invalid_output:shortening_output_too_large`
+ *
  * Prefer the outermost (first) semantic string machine code in the cause chain
  * so intentional wrappers like ETIMEDOUT win over nested ABORT_ERR / numeric
  * DOM codes. Pure-numeric fallback only when no semantic code exists.
  */
 export function safeDreamErrorCode(error: unknown): string {
-  const routed = routedDiagnostic(error);
-  if (routed !== undefined) {
-    return routed;
+  if (error instanceof ModelRoutingError) {
+    return formatModelRoutingDiagnostic(error);
   }
   const code = readMachineCode(error);
   if (code !== undefined) {
@@ -25,24 +30,16 @@ export function safeDreamErrorCode(error: unknown): string {
   return "unknown";
 }
 
-function routedDiagnostic(error: unknown): string | undefined {
-  if (typeof error !== "object" || error === null) return undefined;
-  const record = error as { code?: unknown; attempts?: unknown };
-  const code = typeof record.code === "string" ? sanitizeMachineToken(record.code) : undefined;
-  if (code === undefined || !Array.isArray(record.attempts)) return undefined;
-  const lastAttempt = record.attempts.at(-1);
-  const reason = typeof lastAttempt === "object" && lastAttempt !== null &&
-    typeof (lastAttempt as { decision?: { reason?: unknown } }).decision?.reason === "string"
-    ? sanitizeMachineToken((lastAttempt as { decision: { reason: string } }).decision.reason)
-    : undefined;
-  const parts: string[] = [code];
-  if (reason !== undefined) {
-    parts.push(reason);
+function formatModelRoutingDiagnostic(error: ModelRoutingError): string {
+  const parts: string[] = [error.code];
+  const lastAttempt = error.attempts.at(-1);
+  if (lastAttempt?.decision.reason) {
+    parts.push(lastAttempt.decision.reason);
   }
   const preferred = preferredCauseMachineCode(error);
   if (
     preferred !== undefined &&
-    preferred !== code &&
+    preferred !== error.code &&
     !parts.includes(preferred)
   ) {
     parts.push(preferred);

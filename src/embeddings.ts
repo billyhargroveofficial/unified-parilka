@@ -34,11 +34,8 @@ type EmbeddingsResponse = {
 export const EMBEDDING_NORMALIZATION_VERSION = "l2-v1";
 const MAX_EMBEDDING_RESPONSE_BYTES = 64 * 1024 * 1024;
 
-/** Minimal configuration surface needed by embedding and vector code. */
-export type EmbeddingRuntimeConfig = Pick<AppConfig, "embeddings">;
-
 export class EmbeddingClient {
-  constructor(private readonly config: EmbeddingRuntimeConfig) {}
+  constructor(private readonly config: AppConfig) {}
 
   get isEnabled(): boolean {
     return this.config.embeddings.enabled;
@@ -309,7 +306,7 @@ function unexpectedEmbeddingShape(
   });
 }
 
-export function embeddingNamespace(config: EmbeddingRuntimeConfig): string {
+export function embeddingNamespace(config: AppConfig): string {
   const payload = JSON.stringify({
     provider: embeddingProviderKey(config.embeddings.baseUrl),
     baseUrl: normalizeBaseUrl(config.embeddings.baseUrl),
@@ -522,77 +519,6 @@ export function blobToVector(
   }
   return values;
 }
-
-/**
- * Builds a scorer for a validated query vector without retaining any candidate
- * vector state. Candidate blobs are decoded and validated during each call.
- *
- * This is deliberately separate from `blobToVector`: callers that need a
- * materialized vector still receive an owned copy, while the dense retrieval
- * hot path can read a SQLite BLOB directly. On little-endian, aligned hosts a
- * `Float32Array` view is safe and allocation-free. Other hosts use a
- * little-endian `DataView` fallback, preserving the on-disk BLOB format.
- */
-export function createBlobCosineScorer(
-  normalizedLeft: ArrayLike<number>,
-): (blob: Uint8Array, expectedDimensions?: number) => number {
-  // Snapshot the already-validated query once. This prevents a mutable caller
-  // from introducing a non-finite value after construction while keeping the
-  // repeated candidate path allocation-free.
-  const left = Array.from(normalizedLeft);
-  for (let index = 0; index < left.length; index += 1) {
-    if (!Number.isFinite(left[index])) {
-      throw new TypeError("Cosine similarity requires finite vector values.");
-    }
-  }
-
-  return (blob, expectedDimensions) => {
-    if (blob.byteLength % Float32Array.BYTES_PER_ELEMENT !== 0) {
-      throw new TypeError("Embedding blob byte length must be divisible by 4.");
-    }
-    const dimensions = blob.byteLength / Float32Array.BYTES_PER_ELEMENT;
-    if (
-      dimensions === 0 ||
-      (expectedDimensions !== undefined && dimensions !== expectedDimensions)
-    ) {
-      throw new TypeError(
-        expectedDimensions === undefined
-          ? "Embedding blob must contain at least one dimension."
-          : `Embedding blob expected ${expectedDimensions} dimensions but received ${dimensions}.`,
-      );
-    }
-    if (left.length !== dimensions) {
-      throw new TypeError("Cosine similarity requires vectors with the same dimensions.");
-    }
-
-    let score = 0;
-    if (HOST_IS_LITTLE_ENDIAN && blob.byteOffset % Float32Array.BYTES_PER_ELEMENT === 0) {
-      const values = new Float32Array(blob.buffer, blob.byteOffset, dimensions);
-      for (let index = 0; index < dimensions; index += 1) {
-        const value = values[index]!;
-        if (!Number.isFinite(value)) {
-          throw new TypeError("Embedding blob contains a non-finite value.");
-        }
-        score += left[index]! * value;
-      }
-      return score;
-    }
-
-    const view = new DataView(blob.buffer, blob.byteOffset, blob.byteLength);
-    for (let index = 0; index < dimensions; index += 1) {
-      const value = view.getFloat32(index * Float32Array.BYTES_PER_ELEMENT, true);
-      if (!Number.isFinite(value)) {
-        throw new TypeError("Embedding blob contains a non-finite value.");
-      }
-      score += left[index]! * value;
-    }
-    return score;
-  };
-}
-
-const HOST_IS_LITTLE_ENDIAN = new Uint8Array(
-  new Uint16Array([1]).buffer,
-)[0] === 1;
 
 export function cosineSimilarity(normalizedLeft: ArrayLike<number>, normalizedRight: ArrayLike<number>): number {
   if (normalizedLeft.length !== normalizedRight.length) {

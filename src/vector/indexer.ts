@@ -1,7 +1,7 @@
+import type { AppConfig } from "../config.js";
 import {
   EMBEDDING_NORMALIZATION_VERSION,
   type EmbeddingChunkInput,
-  type EmbeddingRuntimeConfig,
 } from "../embeddings.js";
 import { ToolError } from "../errors.js";
 import { redactUrl } from "../observability/redaction.js";
@@ -37,7 +37,7 @@ export function embeddingEstimateRequiresConfirmation(
 
 export class VectorIndexer {
   constructor(
-    private readonly config: EmbeddingRuntimeConfig,
+    private readonly config: AppConfig,
     private readonly store: MessageStore,
     private readonly backend: VectorBackend,
     private readonly namespace: string,

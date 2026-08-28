@@ -6,7 +6,7 @@ const OFFSET_CONFIRMATION_TIMEOUT_MS = 5_000;
 const ALLOWED_UPDATES = ["message", "edited_message"] as const;
 const HEARTBEAT_INTERVAL_MS = 5 * 60_000;
 
-export interface TelegramLongPollingApiPort {
+export interface GrammyLongPollingApiPort {
   getMe(signal: AbortSignal): Promise<unknown>;
   deleteWebhook(
     options: { drop_pending_updates: false },
@@ -24,7 +24,7 @@ export interface TelegramLongPollingApiPort {
 }
 
 export interface BotApiLongPollerOptions {
-  api: TelegramLongPollingApiPort;
+  api: GrammyLongPollingApiPort;
   processor: BotUpdateProcessor;
   expectedBotId: string;
   expectedBotUsername: string;
@@ -43,7 +43,7 @@ export interface BotApiLongPollerOptions {
  * by committed SQLite state can do that.
  */
 export class BotApiLongPoller {
-  readonly #api: TelegramLongPollingApiPort;
+  readonly #api: GrammyLongPollingApiPort;
   readonly #processor: BotUpdateProcessor;
   readonly #expectedBotId: string;
   readonly #expectedBotUsername: string;
@@ -134,11 +134,7 @@ export class BotApiLongPoller {
     try {
       await this.#initialize(controller.signal);
       initialized = true;
-      if (!this.#stopRequested) {
-        // Identity and webhook ownership are established. Durable workers can
-        // start now; they must not wait for a possibly empty long-poll cycle.
-        onReady?.();
-      }
+      let ready = false;
       let backoffMs = this.#backoffInitialMs;
       while (!this.#stopRequested) {
         let batch: unknown;
@@ -179,6 +175,10 @@ export class BotApiLongPoller {
         }
 
         backoffMs = this.#backoffInitialMs;
+        if (!ready && !this.#stopRequested) {
+          onReady?.();
+          ready = true;
+        }
         const updates = updateBatch(batch);
         let retryCurrentUpdate = false;
         for (const update of updates) {

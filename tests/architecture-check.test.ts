@@ -17,11 +17,17 @@ import {
 } from "../scripts/check-architecture.js";
 
 const thinBarrels = [
+  "src/bot-daemon.ts",
   "src/index.ts",
   "src/sync-daemon.ts",
   "src/bot/read-tools.ts",
+  "src/bot/runtime.ts",
+  "src/bot/runtime-config.ts",
+  "src/bot/turn-coordinator.ts",
+  "src/bot/worker.ts",
   "src/config.ts",
   "src/digests.ts",
+  "src/providers/model-router.ts",
   "src/store.ts",
   "src/sync-engine.ts",
   "src/telegram/mtcute-client.ts",
@@ -57,16 +63,9 @@ function withFixture(run: (root: string) => void): void {
       "loop-develop/README.md",
       "operations/README.md",
       "operations/MIGRATION.md",
-      "package.json",
       ...thinBarrels,
     ]) {
-      writeFixtureFile(
-        root,
-        file,
-        file === "package.json"
-          ? '{"scripts":{"bot":"./bin/parilka-bot","bot:start":"./bin/parilka-bot"}}\n'
-          : undefined,
-      );
+      writeFixtureFile(root, file);
     }
     symlinkSync("AGENTS.md", path.join(root, "CLAUDE.md"));
     run(root);
@@ -104,56 +103,6 @@ test("architecture check accepts bounded source and one active goal", () => {
       productionFiles: thinBarrels.length + 1,
       testFiles: 0,
     });
-  });
-});
-
-test("architecture check rejects a Bot API script that bypasses the locking launcher", () => {
-  withFixture((root) => {
-    writeFileSync(
-      path.join(root, "package.json"),
-      '{"scripts":{"bot":"node dist/bot-daemon.js","bot:start":"./bin/parilka-bot"}}\n',
-    );
-
-    assert.deepEqual(
-      checkArchitecture(root).findings.map((finding) => finding.code),
-      ["unsafe-bot-entrypoint"],
-    );
-  });
-});
-
-test("architecture check rejects retired Codex app-server and Hermes runtime seams", () => {
-  withFixture((root) => {
-    writeFixtureFile(
-      root,
-      "src/bot/codex/client.ts",
-      "export const spawnCodexAppServer = true;\n",
-    );
-    writeFixtureFile(
-      root,
-      "src/current-runtime.ts",
-      'export const key = "PARILKA_BOT_CODEX_HOME";\n',
-    );
-    writeFixtureFile(
-      root,
-      "src/openai-responses/sdk-transport.ts",
-      "export class OpenAiSdkResponsesTransport {}\n",
-    );
-    writeFixtureFile(root, "integrations/hermes/config.yaml", "model: old\n");
-
-    const findings = checkArchitecture(root).findings.filter(
-      (finding) => finding.code === "retired-bot-runtime",
-    );
-    assert.deepEqual(
-      findings.map((finding) => finding.file).sort(),
-      [
-        "integrations/hermes",
-        "src/bot/codex",
-        "src/bot/codex/client.ts",
-        "src/current-runtime.ts",
-        "src/openai-responses/sdk-transport.ts",
-        "src/openai-responses/sdk-transport.ts",
-      ],
-    );
   });
 });
 
@@ -294,6 +243,7 @@ test("architecture check rejects static storage dependencies on upper layers", (
   withFixture((root) => {
     for (const file of [
       "src/bot/read-tools.ts",
+      "src/bot-daemon.ts",
       "src/index.ts",
       "src/mcp-loopback.ts",
       "src/mcp-protocol.ts",
@@ -309,6 +259,7 @@ test("architecture check rejects static storage dependencies on upper layers", (
       "src/storage/forbidden.ts",
       [
         'import "../bot/read-tools.js";',
+        'import "../bot-daemon.js";',
         'export * from "../index.js";',
         'import "../mcp-loopback.js";',
         'export * from "../mcp-protocol.js";',
@@ -322,10 +273,10 @@ test("architecture check rejects static storage dependencies on upper layers", (
     const findings = checkArchitecture(root).findings.filter(
       (finding) => finding.code === "forbidden-storage-dependency",
     );
-    assert.equal(findings.length, 8);
+    assert.equal(findings.length, 9);
     assert.deepEqual(
       findings.map((finding) => finding.file),
-      Array(8).fill("src/storage/forbidden.ts"),
+      Array(9).fill("src/storage/forbidden.ts"),
     );
   });
 });

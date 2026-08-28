@@ -1,3 +1,4 @@
+import { jsonSchema, tool, type ToolSet } from "ai";
 import type {
   StoredChatMemory,
   StoredChatSkill,
@@ -8,17 +9,6 @@ import type {
   UpsertChatLessonInput,
 } from "../store.js";
 import { findSimilarSkill, patchSkill } from "./skill-manager.js";
-
-type ToolSet = Record<string, { execute?: (input: unknown) => Promise<unknown> }>;
-
-/** Local host-tool shape; no AI SDK runtime is loaded by Dream. */
-function tool<T extends { execute: (input: unknown) => Promise<unknown> }>(definition: T): T {
-  return definition;
-}
-
-function jsonSchema<T>(schema: T): T {
-  return schema;
-}
 
 export interface DreamKnowledgeStore {
   getChatMemory(chatId: string): StoredChatMemory | undefined;
@@ -31,7 +21,6 @@ export interface DreamKnowledgeStore {
   getChatSkill(input: { chatId: string; name: string }): StoredChatSkill | undefined;
   upsertChatSkill(input: UpsertChatSkillInput): StoredChatSkill;
 }
-
 export type RememberFastInput = Omit<
   UpsertFastChatMemoryInput,
   "updatedAtMs"
@@ -58,7 +47,7 @@ export interface ReviewToolContext {
   deletionStore?: DreamDeletionStore;
 }
 
-export const reviewSearchLongMemorySchema = {
+const searchLongMemorySchema = {
   type: "object" as const,
   properties: {
     query: {
@@ -71,7 +60,7 @@ export const reviewSearchLongMemorySchema = {
   additionalProperties: false,
 };
 
-export const reviewLoadChatSkillSchema = {
+const loadChatSkillSchema = {
   type: "object" as const,
   properties: {
     name: {
@@ -84,7 +73,7 @@ export const reviewLoadChatSkillSchema = {
   additionalProperties: false,
 };
 
-export const reviewRememberFastSchema = {
+const rememberFastSchema = {
   type: "object" as const,
   properties: {
     title: {
@@ -102,7 +91,7 @@ export const reviewRememberFastSchema = {
   additionalProperties: false,
 };
 
-export const reviewRememberLessonSchema = {
+const rememberLessonSchema = {
   type: "object" as const,
   properties: {
     title: {
@@ -130,7 +119,7 @@ export const reviewRememberLessonSchema = {
   additionalProperties: false,
 };
 
-export const reviewSaveChatSkillSchema = {
+const saveChatSkillSchema = {
   type: "object" as const,
   properties: {
     name: {
@@ -153,127 +142,12 @@ export const reviewSaveChatSkillSchema = {
   additionalProperties: false,
 };
 
-export const reviewDeleteFastSchema = {
-  type: "object" as const,
-  properties: {
-    title: {
-      type: "string" as const,
-      maxLength: 160,
-      description: "Exact title of the fast-memory note to delete.",
-    },
-  },
-  required: ["title"],
-  additionalProperties: false,
-};
-
-export const reviewDeleteLessonSchema = {
-  type: "object" as const,
-  properties: {
-    title: {
-      type: "string" as const,
-      maxLength: 160,
-      description: "Exact title of the lesson to delete.",
-    },
-  },
-  required: ["title"],
-  additionalProperties: false,
-};
-
-export const reviewDeleteSkillSchema = {
-  type: "object" as const,
-  properties: {
-    name: {
-      type: "string" as const,
-      maxLength: 120,
-      description: "Exact name of the skill to delete.",
-    },
-  },
-  required: ["name"],
-  additionalProperties: false,
-};
-
-export type ReviewToolName =
-  | "review_search_long_memory"
-  | "review_load_chat_skill"
-  | "review_remember_fast"
-  | "review_remember_lesson"
-  | "review_save_chat_skill"
-  | "review_delete_fast"
-  | "review_delete_lesson"
-  | "review_delete_skill";
-
-export type ReviewJsonSchema = {
-  readonly type: "object";
-  readonly properties: Record<string, {
-    readonly type: "string";
-    readonly maxLength: number;
-    readonly description: string;
-  }>;
-  readonly required: readonly string[];
-  readonly additionalProperties: boolean;
-};
-
-export type ReviewDynamicTool = {
-  readonly name: ReviewToolName;
-  readonly description: string;
-  readonly inputSchema: ReviewJsonSchema;
-};
-
-/** Schemas sent to the Dream model runner. Keep these model-facing only. */
-export const REVIEW_DYNAMIC_TOOLS: readonly ReviewDynamicTool[] = [
-  {
-    name: "review_search_long_memory",
-    description: "Search existing long-memory semantic summary, lessons and skills for relevant context.",
-    inputSchema: reviewSearchLongMemorySchema,
-  },
-  {
-    name: "review_load_chat_skill",
-    description: "Load the full instructions of an existing chat-local skill by name. Use this before patching a skill.",
-    inputSchema: reviewLoadChatSkillSchema,
-  },
-  {
-    name: "review_remember_fast",
-    description: "Store a short, chat-wide hot fact that should affect upcoming turns.",
-    inputSchema: reviewRememberFastSchema,
-  },
-  {
-    name: "review_remember_lesson",
-    description: "Store a durable problem → solution → when-to-use lesson learned from a correction or successful outcome.",
-    inputSchema: reviewRememberLessonSchema,
-  },
-  {
-    name: "review_save_chat_skill",
-    description: "Create or patch a reusable class-level skill, not a one-off answer.",
-    inputSchema: reviewSaveChatSkillSchema,
-  },
-  {
-    name: "review_delete_fast",
-    description: "Delete a stale fast-memory note by its title.",
-    inputSchema: reviewDeleteFastSchema,
-  },
-  {
-    name: "review_delete_lesson",
-    description: "Delete a stale lesson by its title.",
-    inputSchema: reviewDeleteLessonSchema,
-  },
-  {
-    name: "review_delete_skill",
-    description: "Delete a stale skill by its name.",
-    inputSchema: reviewDeleteSkillSchema,
-  },
-];
-
-export type ReviewToolDispatch = (
-  name: string,
-  input: unknown,
-) => Promise<string>;
-
 export function buildReviewToolSet(context: ReviewToolContext): ToolSet {
   return {
     review_search_long_memory: tool({
       description:
         "Search existing long-memory semantic summary, lessons and skills for relevant context.",
-      inputSchema: jsonSchema<Record<string, unknown>>(reviewSearchLongMemorySchema),
+      inputSchema: jsonSchema<Record<string, unknown>>(searchLongMemorySchema),
       execute: async (input) => {
         const args = input as { query: string };
         const memory = context.store.getChatMemory(context.chatId);
@@ -304,7 +178,7 @@ export function buildReviewToolSet(context: ReviewToolContext): ToolSet {
     review_load_chat_skill: tool({
       description:
         "Load the full instructions of an existing chat-local skill by name. Use this before patching a skill.",
-      inputSchema: jsonSchema<Record<string, unknown>>(reviewLoadChatSkillSchema),
+      inputSchema: jsonSchema<Record<string, unknown>>(loadChatSkillSchema),
       execute: async (input) => {
         const args = input as { name: string };
         const skill = context.store.getChatSkill({
@@ -329,7 +203,7 @@ export function buildReviewToolSet(context: ReviewToolContext): ToolSet {
     review_remember_fast: tool({
       description:
         "Store a short, chat-wide hot fact that should affect upcoming turns. Use only for stable agreements or precisely attributed facts, not for every line.",
-      inputSchema: jsonSchema<Record<string, unknown>>(reviewRememberFastSchema),
+      inputSchema: jsonSchema<Record<string, unknown>>(rememberFastSchema),
       execute: async (input) => {
         const args = input as { title: string; note: string };
         const upsertInput: RememberFastInput = {
@@ -345,7 +219,7 @@ export function buildReviewToolSet(context: ReviewToolContext): ToolSet {
     review_remember_lesson: tool({
       description:
         "Store a durable problem → solution → when-to-use lesson learned from a correction or successful outcome.",
-      inputSchema: jsonSchema<Record<string, unknown>>(reviewRememberLessonSchema),
+      inputSchema: jsonSchema<Record<string, unknown>>(rememberLessonSchema),
       execute: async (input) => {
         const args = input as {
           title: string;
@@ -368,7 +242,7 @@ export function buildReviewToolSet(context: ReviewToolContext): ToolSet {
     review_save_chat_skill: tool({
       description:
         "Create or patch a reusable class-level skill. First search/list skills and load the most similar existing skill; patch it when applicable, otherwise create a new one. Skills must contain triggers, procedure, pitfalls, and verification steps — not a single date or answer.",
-      inputSchema: jsonSchema<Record<string, unknown>>(reviewSaveChatSkillSchema),
+      inputSchema: jsonSchema<Record<string, unknown>>(saveChatSkillSchema),
       execute: async (input) => {
         const args = input as {
           name: string;
@@ -407,7 +281,18 @@ export function buildReviewToolSet(context: ReviewToolContext): ToolSet {
     review_delete_fast: tool({
       description:
         "Delete a stale fast-memory note by its title. Use only for facts that are no longer true, outdated, or were stored by mistake.",
-      inputSchema: jsonSchema<Record<string, unknown>>(reviewDeleteFastSchema),
+      inputSchema: jsonSchema<Record<string, unknown>>({
+        type: "object",
+        properties: {
+          title: {
+            type: "string",
+            maxLength: 160,
+            description: "Exact title of the fast-memory note to delete.",
+          },
+        },
+        required: ["title"],
+        additionalProperties: false,
+      }),
       execute: async (input) => {
         const args = input as { title: string };
         if (!context.deletionStore) {
@@ -420,7 +305,18 @@ export function buildReviewToolSet(context: ReviewToolContext): ToolSet {
     review_delete_lesson: tool({
       description:
         "Delete a stale lesson by its title. Use only for lessons that are no longer relevant, were learned from a one-time event, or have been superseded.",
-      inputSchema: jsonSchema<Record<string, unknown>>(reviewDeleteLessonSchema),
+      inputSchema: jsonSchema<Record<string, unknown>>({
+        type: "object",
+        properties: {
+          title: {
+            type: "string",
+            maxLength: 160,
+            description: "Exact title of the lesson to delete.",
+          },
+        },
+        required: ["title"],
+        additionalProperties: false,
+      }),
       execute: async (input) => {
         const args = input as { title: string };
         if (!context.deletionStore) {
@@ -433,7 +329,18 @@ export function buildReviewToolSet(context: ReviewToolContext): ToolSet {
     review_delete_skill: tool({
       description:
         "Delete a stale skill by its name. Use only for skills that are obsolete, have been replaced, or were created in error.",
-      inputSchema: jsonSchema<Record<string, unknown>>(reviewDeleteSkillSchema),
+      inputSchema: jsonSchema<Record<string, unknown>>({
+        type: "object",
+        properties: {
+          name: {
+            type: "string",
+            maxLength: 120,
+            description: "Exact name of the skill to delete.",
+          },
+        },
+        required: ["name"],
+        additionalProperties: false,
+      }),
       execute: async (input) => {
         const args = input as { name: string };
         if (!context.deletionStore) {
@@ -444,73 +351,4 @@ export function buildReviewToolSet(context: ReviewToolContext): ToolSet {
       },
     }),
   };
-}
-
-/**
- * Host-side dispatcher for Responses function tools. It validates the raw
- * model arguments before they reach a staged store, so malformed calls
- * cannot partially mutate the current review attempt. The context is never
- * model-provided: chat and source-message identity stay injected here.
- */
-export function buildReviewToolDispatcher(
-  context: ReviewToolContext,
-): ReviewToolDispatch {
-  const tools = buildReviewToolSet(context) as Record<string, unknown>;
-  const definitions = new Map(
-    REVIEW_DYNAMIC_TOOLS.map((definition) => [definition.name, definition]),
-  );
-  return async (name: string, input: unknown): Promise<string> => {
-    const definition = definitions.get(name as ReviewToolName);
-    if (!definition) {
-      throw reviewToolInputError("unknown_tool");
-    }
-    assertReviewToolInput(definition.inputSchema, input);
-    const execute = (tools[name] as {
-      execute?: (args: unknown) => Promise<unknown>;
-    } | undefined)?.execute;
-    if (!execute) {
-      // Treat a programming/configuration fault as fail-closed too: there is
-      // no generic fallback that might accidentally expose a wider tool set.
-      throw reviewToolInputError("tool_unavailable");
-    }
-    const result = await execute(input);
-    return typeof result === "string" ? result : JSON.stringify(result);
-  };
-}
-
-function assertReviewToolInput(
-  schema: ReviewJsonSchema,
-  input: unknown,
-): asserts input is Record<string, string> {
-  if (
-    input === null ||
-    typeof input !== "object" ||
-    Array.isArray(input) ||
-    Object.getPrototypeOf(input) !== Object.prototype
-  ) {
-    throw reviewToolInputError("invalid_arguments");
-  }
-  const record = input as Record<string, unknown>;
-  const allowed = new Set(Object.keys(schema.properties));
-  for (const key of Object.keys(record)) {
-    if (!allowed.has(key)) throw reviewToolInputError("unexpected_argument");
-  }
-  for (const key of schema.required) {
-    const value = record[key];
-    const property = schema.properties[key];
-    if (
-      property === undefined ||
-      typeof value !== "string" ||
-      value.length > property.maxLength
-    ) {
-      throw reviewToolInputError("invalid_arguments");
-    }
-  }
-}
-
-function reviewToolInputError(code: string): Error {
-  return Object.assign(new Error("Dream review tool arguments are invalid."), {
-    name: "DreamReviewToolInputError",
-    code,
-  });
 }

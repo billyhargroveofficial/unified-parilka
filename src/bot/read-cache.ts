@@ -11,7 +11,7 @@ import type {
   VectorRerankResult,
   VectorSearchHit,
 } from "../vector-rag.js";
-import type { JsonEventLogger } from "../observability/contracts.js";
+import type { JsonEventLogger } from "./worker.js";
 import { selectCausalDigests } from "./read-tools/week-causal-proof.js";
 import {
   causalSafeHits,

@@ -91,10 +91,7 @@ export abstract class SparsePostingsMethods extends StoreCore {
     );
     let windowClauses = "";
     if (params.beforeId != null) {
-      // Match the dense causal boundary exactly: a crossing chunk's learned
-      // sparse postings encode trigger/future text, so it cannot be a
-      // candidate merely because it has an older first message.
-      windowClauses += " AND c.end_message_id < ?";
+      windowClauses += " AND c.start_message_id < ?";
       values.push(params.beforeId);
     }
     if (params.afterId != null) {

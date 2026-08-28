@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { test, type TestContext } from "node:test";
+import { SCHEMA_VERSION } from "../src/storage/constants.js";
 import { MessageStore } from "../src/store.js";
 
 test("day digests are chat-scoped, ordered, and fully replace stale metadata", (t) => {
@@ -213,7 +214,7 @@ test("version 11 databases receive digest tables in one atomic migration", (t) =
   raw.close();
 
   const migrated = new MessageStore(path);
-  assert.equal(migrated.getSchemaVersion(), 24);
+  assert.equal(migrated.getSchemaVersion(), SCHEMA_VERSION);
   assert.deepEqual(
     migrated.getDayDigests({
       chatId: "-1001",

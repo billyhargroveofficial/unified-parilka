@@ -1,0 +1,37 @@
+{
+  "allowInsecureLocal": false,
+  "providers": [
+    {
+      "id": "openai_primary",
+      "protocol": "openai",
+      "baseUrl": "https://api.openai.com/v1",
+      "apiKeyEnv": "PARILKA_OPENAI_API_KEY"
+    },
+    {
+      "id": "anthropic_fallback",
+      "protocol": "anthropic",
+      "baseUrl": "https://api.anthropic.com/v1",
+      "apiKeyEnv": "PARILKA_ANTHROPIC_API_KEY"
+    }
+  ],
+  "modelCapabilities": {
+    "openai_primary:your-openai-model-id": {
+      "vision": true,
+      "contextWindowTokens": 128000
+    },
+    "anthropic_fallback:your-anthropic-model-id": {
+      "vision": true,
+      "contextWindowTokens": 200000
+    }
+  },
+  "roles": {
+    "turn": [
+      "openai_primary:your-openai-model-id",
+      "anthropic_fallback:your-anthropic-model-id"
+    ],
+    "summary": [
+      "anthropic_fallback:your-anthropic-model-id",
+      "openai_primary:your-openai-model-id"
+    ]
+  }
+}

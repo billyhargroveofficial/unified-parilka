@@ -366,7 +366,7 @@ function cacheToolDef(source: BotReadToolDefinition): ToolDef {
     minimum: 1,
     maximum: Number.MAX_SAFE_INTEGER,
     description:
-      "Обязательный служебный ID сообщения-триггера текущего хода, который подставляет trusted host bridge и не передаёт под контроль модели. Инструмент никогда не возвращает это сообщение или более новые.",
+      "Обязательный служебный ID сообщения-триггера текущего хода, который подставляет trusted bridge (текущий Hermes model-facing plugin скрывает его и подставляет HERMES_SESSION_MESSAGE_ID). Инструмент никогда не возвращает это сообщение или более новые.",
   };
   const required = [
     ...((schema.required as string[] | undefined) ?? []),

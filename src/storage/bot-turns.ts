@@ -280,51 +280,37 @@ declare protected getBotUpdateLocked: (
     return this.finishClaimedBotTurn(turnId, workerId, "skipped", reason, nowMs);
   }
 
-  markBotTurnFailed(
-    turnId: number,
-    workerId: string,
-    error: string,
-    nowMs = Date.now(),
-    retryable = true,
-  ): boolean {
+  markBotTurnFailed(turnId: number, workerId: string, error: string, nowMs = Date.now()): boolean {
     assertBotTurnId(turnId);
     assertTimestamp(nowMs, "nowMs");
     const owner = workerId.trim();
     if (!owner) {
       throw new Error("workerId must not be empty.");
     }
-    if (typeof retryable !== "boolean") {
-      throw new TypeError("retryable must be a boolean.");
-    }
     return this.immediateTransaction("markBotTurnFailed", () => {
       const current = this.getBotTurnLocked(turnId);
       const retryNotBeforeMs =
-        retryable && current != null && current.attempts < current.maxAttempts
+        current != null && current.attempts < current.maxAttempts
           ? nowMs + botTurnRetryDelayMs(current.attempts)
           : null;
       const result = this.db
         .prepare(
           `UPDATE bot_turns
-           SET status = CASE
-                 WHEN ? = 1 AND attempts < max_attempts THEN 'failed'
-                 ELSE 'dead_letter'
-               END,
+           SET status = CASE WHEN attempts >= max_attempts THEN 'dead_letter' ELSE 'failed' END,
                error = ?, lease_owner = NULL, lease_expires_at_ms = NULL,
-               retry_not_before_ms = ?,
-               updated_at_ms = ?,
-               completed_at_ms = CASE
-                 WHEN ? = 1 AND attempts < max_attempts THEN NULL
+               retry_not_before_ms = CASE
+                 WHEN attempts >= max_attempts THEN NULL
                  ELSE ?
-               END
+               END,
+               updated_at_ms = ?,
+               completed_at_ms = CASE WHEN attempts >= max_attempts THEN ? ELSE NULL END
            WHERE id = ? AND status IN ('running', 'drafted') AND lease_owner = ?
              AND lease_expires_at_ms > ?`,
         )
         .run(
-          retryable ? 1 : 0,
           error.trim() || "Bot turn failed.",
           retryNotBeforeMs,
           nowMs,
-          retryable ? 1 : 0,
           nowMs,
           turnId,
           owner,
@@ -383,59 +369,6 @@ declare protected getBotUpdateLocked: (
            WHERE id = ?`,
         )
         .run(nowMs, turnId);
-      if (result.changes > 0) {
-        this.syncBotUpdateFromTurnLocked(turnId, nowMs);
-      }
-      return result.changes > 0;
-    });
-  }
-
-  /**
-   * Returns one terminal turn whose presentation-only progress bubble still
-   * needs deletion. The durable message id is retained until the Bot API
-   * confirms cleanup, including after a final reply was already delivered.
-   */
-  getNextBotTurnProgressCleanup(chatId: string): StoredBotTurn | undefined {
-    const normalizedChatId = chatId.trim();
-    assertNonEmptyBounded(normalizedChatId, 256, "chatId");
-    const row = this.db
-      .prepare(
-        `SELECT id
-         FROM bot_turns
-         WHERE chat_id = ?
-           AND progress_message_id IS NOT NULL
-           AND status IN ('sent', 'skipped', 'lost_ack', 'dead_letter')
-         ORDER BY updated_at_ms ASC, id ASC
-         LIMIT 1`,
-      )
-      .get(normalizedChatId) as Record<string, unknown> | undefined;
-    return row === undefined ? undefined : this.getBotTurnLocked(Number(row.id));
-  }
-
-  /**
-   * Clears only the exact persisted progress fence selected for cleanup.
-   * Matching the message id prevents a stale cleaner from erasing a newer
-   * presentation message should terminal-state handling ever be extended.
-   */
-  clearTerminalBotTurnProgressIfMatches(
-    turnId: number,
-    messageId: number,
-    nowMs = Date.now(),
-  ): boolean {
-    assertBotTurnId(turnId);
-    if (!Number.isSafeInteger(messageId) || messageId < 1) {
-      throw new Error("progress messageId must be a positive safe integer.");
-    }
-    assertTimestamp(nowMs, "nowMs");
-    return this.immediateTransaction("clearTerminalBotTurnProgressIfMatches", () => {
-      const result = this.db
-        .prepare(
-          `UPDATE bot_turns
-           SET progress_message_id = NULL, progress_state = NULL, updated_at_ms = ?
-           WHERE id = ? AND progress_message_id = ?
-             AND status IN ('sent', 'skipped', 'lost_ack', 'dead_letter')`,
-        )
-        .run(nowMs, turnId, messageId);
       if (result.changes > 0) {
         this.syncBotUpdateFromTurnLocked(turnId, nowMs);
       }
@@ -660,8 +593,6 @@ export type BotTurnApi = Pick<
   | "markBotTurnFailed"
   | "saveBotTurnProgress"
   | "clearBotTurnProgress"
-  | "getNextBotTurnProgressCleanup"
-  | "clearTerminalBotTurnProgressIfMatches"
   | "getBotTurn"
   | "getBotTurnByTrigger"
   | "queryBotTurns"

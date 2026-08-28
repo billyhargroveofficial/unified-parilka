@@ -1,8 +1,10 @@
 import type { StoredMessage } from "../../store.js";
 import type {
-  TelegramImageReference,
-  TelegramImageSource,
-  TelegramImageTarget,
+  SelectedTelegramMedia,
+  TelegramMediaTarget,
+  TelegramMediaKind,
+  TelegramMediaReference,
+  TelegramMediaSource,
 } from "./contracts.js";
 
 const MAX_RAW_MESSAGE_CHARS = 2_000_000;
@@ -11,171 +13,323 @@ const MAX_FILE_ID_CHARS = 512;
 type JsonObject = Record<string, unknown>;
 
 /**
- * Parses only image-capable Bot API message shapes. This is intentionally
- * transport-private: no file id or download path is rendered into model text.
+ * Extracts a download reference from the raw Bot API message kept in the
+ * durable store. Invalid, old MTProto, and unexpected payloads simply have no
+ * downloadable media. This parser never throws and does not expose raw JSON.
  */
-export function parseStoredTelegramImage(
+export function parseStoredTelegramMedia(
   message: Pick<StoredMessage, "rawJson">,
-): TelegramImageReference | undefined {
-  return parseImageMessage(parseRawMessage(message.rawJson));
+): TelegramMediaReference | undefined {
+  const raw = message.rawJson;
+  if (typeof raw !== "string" || raw.length === 0 || raw.length > MAX_RAW_MESSAGE_CHARS) {
+    return undefined;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+  const value = asObject(parsed);
+  if (!value) {
+    return undefined;
+  }
+
+  return parsePhoto(value)
+    ?? parseSingleFile(value, "voice")
+    ?? parseSingleFile(value, "video_note")
+    ?? parseSingleFile(value, "audio");
 }
 
 /**
- * Selects an image from the addressed message, then exactly one direct reply.
- * An embedded reply is used only to cover Bot API privacy-mode delivery; it
- * never creates arbitrary chat-history access.
+ * Picks media only from the addressed message or the one message it directly
+ * replies to. This prevents a tool from turning arbitrary chat history into a
+ * media extraction interface.
  */
-export function selectTelegramImageTarget(
+export function selectTargetedTelegramMedia(input: {
+  trigger: Pick<StoredMessage, "messageId" | "rawJson">;
+  reply?: Pick<StoredMessage, "messageId" | "rawJson">;
+  source?: TelegramMediaSource;
+  kinds?: readonly TelegramMediaKind[];
+}): SelectedTelegramMedia | undefined {
+  const candidates: Array<{
+    source: TelegramMediaSource;
+    message: Pick<StoredMessage, "messageId" | "rawJson"> | undefined;
+  }> = input.source === "trigger"
+    ? [{ source: "trigger", message: input.trigger }]
+    : input.source === "reply"
+      ? [{ source: "reply", message: input.reply }]
+      : [
+          { source: "trigger", message: input.trigger },
+          { source: "reply", message: input.reply },
+        ];
+
+  for (const candidate of candidates) {
+    if (!candidate.message) {
+      continue;
+    }
+    const media = parseStoredTelegramMedia(candidate.message);
+    if (!media || (input.kinds && !input.kinds.includes(media.kind))) {
+      continue;
+    }
+    return {
+      source: candidate.source,
+      messageId: candidate.message.messageId,
+      media,
+    };
+  }
+  return undefined;
+}
+
+/**
+ * Convenience form for bot turns: only the addressed message and its direct
+ * reply target are eligible. The returned stored message lets the caller
+ * retain attribution without giving a model arbitrary message lookup.
+ */
+export function selectTelegramMediaTarget(
   trigger: StoredMessage,
   replyTarget?: StoredMessage,
-): TelegramImageTarget | undefined {
-  const triggerImage = parseStoredTelegramImage(trigger);
-  if (triggerImage) return { ...triggerImage, source: "trigger", message: trigger };
-
-  if (replyTarget) {
-    const replyImage = parseStoredTelegramImage(replyTarget);
-    if (replyImage) return { ...replyImage, source: "reply", message: replyTarget };
+  kinds?: readonly TelegramMediaKind[],
+): TelegramMediaTarget | undefined {
+  const direct = selectedTarget(
+    trigger,
+    replyTarget,
+    kinds,
+  );
+  if (direct) {
+    return direct;
   }
 
-  const embedded = embeddedReplyTarget(trigger);
-  const replyImage = embedded && parseStoredTelegramImage(embedded);
-  return replyImage && embedded
-    ? { ...replyImage, source: "reply", message: embedded }
-    : undefined;
+  // Privacy-mode bots commonly receive the addressed reply but not the
+  // original unmentioned voice/photo as a standalone update. Bot API embeds
+  // precisely that direct reply in the addressed message, so recover it from
+  // the already-persisted payload. It is still one-hop, same-chat media --
+  // never arbitrary history selected by a model or by a user-supplied ID.
+  const embeddedReply = embeddedReplyTarget(trigger);
+  return embeddedReply === undefined
+    ? undefined
+    : selectedTarget(trigger, embeddedReply, kinds, true);
 }
 
-function parseImageMessage(value: JsonObject | undefined): TelegramImageReference | undefined {
-  return parsePhoto(value) ?? parseDocument(value);
+function selectedTarget(
+  trigger: StoredMessage,
+  replyTarget: StoredMessage | undefined,
+  kinds: readonly TelegramMediaKind[] | undefined,
+  skipTrigger = false,
+): TelegramMediaTarget | undefined {
+  const selected = selectTargetedTelegramMedia({
+    trigger,
+    reply: replyTarget,
+    ...(skipTrigger ? { source: "reply" as const } : {}),
+    ...(kinds === undefined ? {} : { kinds }),
+  });
+  if (!selected) {
+    return undefined;
+  }
+  const message = selected.source === "trigger" ? trigger : replyTarget;
+  return message === undefined
+    ? undefined
+    : { ...selected.media, source: selected.source, message };
 }
 
-function parsePhoto(value: JsonObject | undefined): TelegramImageReference | undefined {
-  if (!Array.isArray(value?.photo)) return undefined;
+/**
+ * Reconstructs only the one direct `reply_to_message` carried by a Bot API
+ * update. This is intentionally separate from normal history lookup: it
+ * covers privacy-mode delivery without opening a path to arbitrary message
+ * IDs or cross-chat media.
+ */
+function embeddedReplyTarget(trigger: StoredMessage): StoredMessage | undefined {
+  const root = parseRawMessage(trigger.rawJson);
+  const reply = asObject(root?.reply_to_message);
+  if (!reply) {
+    return undefined;
+  }
+  const messageId = positiveInteger(reply.message_id);
+  const chat = asObject(reply.chat);
+  const chatId = telegramId(chat?.id);
+  if (messageId === undefined || chatId !== trigger.chatId) {
+    return undefined;
+  }
+  const rawJson = boundedJson(reply);
+  if (rawJson === undefined) {
+    return undefined;
+  }
+  const from = asObject(reply.from);
+  const date = botApiDate(reply.date);
+  const senderId = telegramId(from?.id);
+  const senderName = displayName(from);
+  return {
+    chatId,
+    messageId,
+    ...(date === undefined ? {} : { date }),
+    ...(senderId === undefined ? {} : { senderId }),
+    ...(senderName === undefined ? {} : { senderName }),
+    text: messageText(reply),
+    rawJson,
+  };
+}
+
+function parsePhoto(value: JsonObject): TelegramMediaReference | undefined {
+  if (!Array.isArray(value.photo)) {
+    return undefined;
+  }
   let selected: JsonObject | undefined;
   let selectedArea = -1;
-  for (const candidate of value.photo) {
-    const photo = asObject(candidate);
-    if (!photo || !fileId(photo.file_id)) continue;
+  for (const item of value.photo) {
+    const photo = asObject(item);
+    if (!photo || !fileId(photo.file_id)) {
+      continue;
+    }
     const width = nonNegativeInteger(photo.width);
     const height = nonNegativeInteger(photo.height);
     const area = (width ?? 0) * (height ?? 0);
-    if (selected === undefined || area > selectedArea) {
+    if (!selected || area > selectedArea) {
       selected = photo;
       selectedArea = area;
     }
   }
-  if (!selected) return undefined;
-  return referenceFromFile("photo", selected, "image/jpeg");
+  return selected ? referenceFromFile("photo", selected) : undefined;
 }
 
-function parseDocument(value: JsonObject | undefined): TelegramImageReference | undefined {
-  const document = asObject(value?.document);
-  if (!document || !fileId(document.file_id)) return undefined;
-  const mimeType = supportedImageMime(document.mime_type);
-  return mimeType === undefined ? undefined : referenceFromFile("document", document, mimeType);
+function parseSingleFile(
+  value: JsonObject,
+  kind: Exclude<TelegramMediaKind, "photo">,
+): TelegramMediaReference | undefined {
+  const file = asObject(value[kind]);
+  return file && fileId(file.file_id) ? referenceFromFile(kind, file) : undefined;
 }
 
 function referenceFromFile(
-  kind: TelegramImageReference["kind"],
+  kind: TelegramMediaKind,
   file: JsonObject,
-  mediaType: TelegramImageReference["mediaType"],
-): TelegramImageReference {
-  const id = fileId(file.file_id);
-  if (!id) throw new TypeError("validated file id is required");
+): TelegramMediaReference {
+  const fileIdValue = fileId(file.file_id);
+  if (!fileIdValue) {
+    throw new TypeError("A validated Telegram file id is required.");
+  }
   const fileSize = nonNegativeInteger(file.file_size);
+  const durationSeconds = nonNegativeInteger(file.duration);
   const width = nonNegativeInteger(file.width);
   const height = nonNegativeInteger(file.height);
+  const mimeType = boundedString(file.mime_type, 128);
   return {
     kind,
-    fileId: id,
-    mediaType,
+    fileId: fileIdValue,
+    mediaType: mimeType ?? defaultMediaType(kind),
     ...(fileSize === undefined ? {} : { fileSize }),
+    ...(durationSeconds === undefined ? {} : { durationSeconds }),
+    ...(mimeType === undefined ? {} : { mimeType }),
     ...(width === undefined ? {} : { width }),
     ...(height === undefined ? {} : { height }),
   };
 }
 
-function embeddedReplyTarget(trigger: StoredMessage): StoredMessage | undefined {
-  const root = parseRawMessage(trigger.rawJson);
-  const reply = asObject(root?.reply_to_message);
-  if (!reply) return undefined;
-  const messageId = positiveInteger(reply.message_id);
-  const replyChatId = telegramId(asObject(reply.chat)?.id);
-  if (messageId === undefined || replyChatId !== trigger.chatId) return undefined;
-  const rawJson = boundedJson(reply);
-  if (rawJson === undefined) return undefined;
-  return {
-    chatId: trigger.chatId,
-    messageId,
-    text: messageText(reply),
-    ...(botApiDate(reply.date) === undefined ? {} : { date: botApiDate(reply.date) }),
-    ...(telegramId(asObject(reply.from)?.id) === undefined ? {} : { senderId: telegramId(asObject(reply.from)?.id) }),
-    ...(displayName(asObject(reply.from)) === undefined ? {} : { senderName: displayName(asObject(reply.from)) }),
-    rawJson,
-  };
+function defaultMediaType(kind: TelegramMediaKind): string {
+  switch (kind) {
+    case "photo":
+      return "image/jpeg";
+    case "voice":
+      return "audio/ogg";
+    case "video_note":
+      return "video/mp4";
+    case "audio":
+      return "audio/mpeg";
+  }
+}
+
+function asObject(value: unknown): JsonObject | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as JsonObject
+    : undefined;
 }
 
 function parseRawMessage(raw: unknown): JsonObject | undefined {
-  if (typeof raw !== "string" || raw.length === 0 || raw.length > MAX_RAW_MESSAGE_CHARS) return undefined;
-  try { return asObject(JSON.parse(raw)); } catch { return undefined; }
+  if (typeof raw !== "string" || raw.length === 0 || raw.length > MAX_RAW_MESSAGE_CHARS) {
+    return undefined;
+  }
+  try {
+    return asObject(JSON.parse(raw));
+  } catch {
+    return undefined;
+  }
 }
 
-function supportedImageMime(value: unknown): TelegramImageReference["mediaType"] | undefined {
-  switch (typeof value === "string" ? value.toLowerCase() : "") {
-    case "image/jpeg": return "image/jpeg";
-    case "image/png": return "image/png";
-    case "image/webp": return "image/webp";
-    case "image/gif": return "image/gif";
-    default: return undefined;
+function boundedJson(value: unknown): string | undefined {
+  try {
+    const json = JSON.stringify(value);
+    return json.length <= MAX_RAW_MESSAGE_CHARS ? json : undefined;
+  } catch {
+    return undefined;
   }
 }
 
 function fileId(value: unknown): string | undefined {
-  return typeof value === "string" && value.length > 0 && value.length <= MAX_FILE_ID_CHARS && /^[A-Za-z0-9_-]+$/u.test(value)
+  return typeof value === "string"
+    && value.length > 0
+    && value.length <= MAX_FILE_ID_CHARS
+    && /^[A-Za-z0-9_-]+$/u.test(value)
     ? value
     : undefined;
 }
 
-function asObject(value: unknown): JsonObject | undefined {
-  return value !== null && typeof value === "object" && !Array.isArray(value) ? value as JsonObject : undefined;
-}
-
 function nonNegativeInteger(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+    ? value
+    : undefined;
 }
 
 function positiveInteger(value: unknown): number | undefined {
-  const parsed = nonNegativeInteger(value);
-  return parsed !== undefined && parsed > 0 ? parsed : undefined;
+  const integer = nonNegativeInteger(value);
+  return integer !== undefined && integer > 0 ? integer : undefined;
 }
 
 function telegramId(value: unknown): string | undefined {
-  if (typeof value === "number") return Number.isSafeInteger(value) ? String(value) : undefined;
+  if (typeof value === "number") {
+    return Number.isSafeInteger(value) ? String(value) : undefined;
+  }
   return typeof value === "string" && /^-?\d+$/u.test(value)
     ? value.replace(/^-?0+(?=\d)/u, (zeroes) => zeroes.startsWith("-") ? "-" : "")
     : undefined;
 }
 
-function boundedJson(value: unknown): string | undefined {
-  try {
-    const result = JSON.stringify(value);
-    return result.length <= MAX_RAW_MESSAGE_CHARS ? result : undefined;
-  } catch { return undefined; }
-}
-
-function messageText(value: JsonObject): string {
-  const text = typeof value.text === "string" ? value.text : typeof value.caption === "string" ? value.caption : "";
-  return text.length <= 16_384 ? text : text.slice(0, 16_384);
-}
-
 function botApiDate(value: unknown): string | undefined {
   const seconds = nonNegativeInteger(value);
-  if (seconds === undefined) return undefined;
-  try { return new Date(seconds * 1_000).toISOString(); } catch { return undefined; }
+  if (seconds === undefined) {
+    return undefined;
+  }
+  const timestamp = seconds * 1_000;
+  if (!Number.isSafeInteger(timestamp)) {
+    return undefined;
+  }
+  try {
+    return new Date(timestamp).toISOString();
+  } catch {
+    return undefined;
+  }
 }
 
 function displayName(value: JsonObject | undefined): string | undefined {
-  for (const candidate of [value?.username, value?.first_name]) {
-    if (typeof candidate === "string" && candidate.length > 0 && candidate.length <= 256) return candidate;
+  const candidates = [value?.username, value?.first_name];
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && candidate.length > 0 && candidate.length <= 256) {
+      return candidate;
+    }
   }
   return undefined;
+}
+
+function messageText(value: JsonObject): string {
+  const text = typeof value.text === "string"
+    ? value.text
+    : typeof value.caption === "string"
+      ? value.caption
+      : "";
+  return text.length <= 16_384 ? text : text.slice(0, 16_384);
+}
+
+function boundedString(value: unknown, maximum: number): string | undefined {
+  return typeof value === "string" && value.length > 0 && value.length <= maximum
+    ? value
+    : undefined;
 }

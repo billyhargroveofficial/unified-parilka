@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { test, type TestContext } from "node:test";
 import { fingerprintEmbeddingSource } from "../src/embedding-source.js";
+import { SCHEMA_VERSION } from "../src/storage/constants.js";
 import {
   MAX_SPARSE_QUERY_TERMS,
   MessageStore,
@@ -90,11 +91,11 @@ function chunkInput(params: {
 test("fresh schema v21 creates sparse postings objects and is idempotent", (t) => {
   const dbPath = tempStorePath(t);
   const store = new MessageStore(dbPath);
-  assert.equal(store.getSchemaVersion(), 24);
+  assert.equal(store.getSchemaVersion(), SCHEMA_VERSION);
   store.close();
   // Second open must be a no-op migration over identical objects.
   const reopened = new MessageStore(dbPath);
-  assert.equal(reopened.getSchemaVersion(), 24);
+  assert.equal(reopened.getSchemaVersion(), SCHEMA_VERSION);
   reopened.close();
 });
 
@@ -120,7 +121,7 @@ test("temp-DB rehearsal migrates v20 to v21 idempotently", (t) => {
 
   const migrated = new MessageStore(dbPath);
   try {
-    assert.equal(migrated.getSchemaVersion(), 24);
+    assert.equal(migrated.getSchemaVersion(), SCHEMA_VERSION);
     const db = new DatabaseSync(dbPath, { readOnly: true });
     try {
       const table = db
@@ -156,7 +157,7 @@ test("temp-DB rehearsal migrates v20 to v21 idempotently", (t) => {
 
   // Idempotent second migration pass.
   const again = new MessageStore(dbPath);
-    assert.equal(again.getSchemaVersion(), 24);
+  assert.equal(again.getSchemaVersion(), SCHEMA_VERSION);
   again.close();
 });
 

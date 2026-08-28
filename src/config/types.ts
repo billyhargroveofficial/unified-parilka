@@ -119,4 +119,15 @@ export type AppConfig = {
   memory: {
     memoryMaxChars: number;
   };
+  /**
+   * Populated by loadConfig for every production config; optional only so
+   * hand-built test/smoke configs do not need the section.
+   */
+  hermesProjection?: {
+    /**
+     * Kill switch for the Hermes profile projection apply pass. 1/true/yes
+     * enables it; missing/empty/false leaves the profile untouched.
+     */
+    enabled: boolean;
+  };
 };

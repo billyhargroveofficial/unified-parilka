@@ -1,15 +1,12 @@
 node_modules/
 dist/
-.deploy/responses-releases/
-.deploy/responses-current
-.deploy/responses-dist/
+.deploy/
 .env
 .env.*
 !.env.example
+!integrations/hermes/parilka-profile/.env.template
 *.env
 *.env.*
-!config/parilka-bot.env.example
-!config/parilka-maintain.env.example
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal

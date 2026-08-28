@@ -252,8 +252,14 @@ function assertDirty(
 
 function ingestBotMessage(
   store: MessageStore,
-  _updateId: number,
+  updateId: number,
   botMessage: StoredMessage,
 ): void {
-  store.upsertMessages(CHAT, [botMessage]);
+  store.ingestBotUpdate({
+    updateId,
+    rawJson: JSON.stringify({ update_id: updateId }),
+    chat: CHAT,
+    message: botMessage,
+    addressed: false,
+  });
 }

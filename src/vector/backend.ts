@@ -1,3 +1,4 @@
+import type { AppConfig } from "../config.js";
 import type { EmbeddingBackendKind } from "../config/types.js";
 import {
   LOCAL_BGE_M3_DIMENSIONS,
@@ -11,7 +12,6 @@ import {
   vectorToBlob,
   type EmbeddingChunkInput,
   type EmbeddingChunkVector,
-  type EmbeddingRuntimeConfig,
 } from "../embeddings.js";
 import { fingerprintEmbeddingSource } from "../embedding-source.js";
 import { ToolError } from "../errors.js";
@@ -60,7 +60,7 @@ export interface VectorBackend {
 }
 
 export function createVectorBackend(
-  config: EmbeddingRuntimeConfig,
+  config: AppConfig,
 ): VectorBackend {
   if (config.embeddings.backend === "local_bge_m3") {
     return new LocalBgeM3Backend(config);
@@ -71,9 +71,9 @@ export function createVectorBackend(
 class ExternalOpenAiBackend implements VectorBackend {
   readonly kind = "external_openai" as const;
   readonly #client: EmbeddingClient;
-  readonly #config: EmbeddingRuntimeConfig;
+  readonly #config: AppConfig;
 
-  constructor(config: EmbeddingRuntimeConfig) {
+  constructor(config: AppConfig) {
     this.#config = config;
     this.#client = new EmbeddingClient(config);
   }
@@ -155,9 +155,9 @@ class ExternalOpenAiBackend implements VectorBackend {
 class LocalBgeM3Backend implements VectorBackend {
   readonly kind = "local_bge_m3" as const;
   readonly #client: LocalBgeM3Client;
-  readonly #config: EmbeddingRuntimeConfig;
+  readonly #config: AppConfig;
 
-  constructor(config: EmbeddingRuntimeConfig) {
+  constructor(config: AppConfig) {
     this.#config = config;
     this.#client = new LocalBgeM3Client(config);
   }

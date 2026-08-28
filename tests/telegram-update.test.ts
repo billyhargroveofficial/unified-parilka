@@ -395,6 +395,57 @@ test("malformed messages and entities fail closed without throwing", () => {
   assert.equal(validAfterMalformed.addressed, true);
 });
 
+test("UTF-16 mention parsing survives deterministic emoji fuzz cases", () => {
+  const random = mulberry32(0xc0d_ea5);
+  const fragments = ["a", "я", "😀", "🔥", "🧑‍💻", " "];
+
+  for (let sample = 0; sample < 200; sample += 1) {
+    let prefix = "😀";
+    const fragmentCount = 1 + Math.floor(random() * 20);
+    for (let index = 0; index < fragmentCount; index += 1) {
+      prefix += fragments[Math.floor(random() * fragments.length)];
+    }
+    prefix += " ";
+
+    const text = `${prefix}@ParilkaBot хвост`;
+    const utf16Offset = prefix.length;
+    const codePointOffset = [...prefix].length;
+    assert.notEqual(codePointOffset, utf16Offset);
+
+    const valid = normalizeTelegramUpdate(
+      botUpdate({
+        message_id: 1_000 + sample,
+        text,
+        entities: [
+          {
+            type: "mention",
+            offset: utf16Offset,
+            length: "@ParilkaBot".length,
+          },
+        ],
+      }),
+      OPTIONS,
+    );
+    assert.equal(valid.addressed, true, `valid sample ${sample}`);
+
+    const malformed = normalizeTelegramUpdate(
+      botUpdate({
+        message_id: 2_000 + sample,
+        text,
+        entities: [
+          {
+            type: "mention",
+            offset: codePointOffset,
+            length: "@ParilkaBot".length,
+          },
+        ],
+      }),
+      OPTIONS,
+    );
+    assert.equal(malformed.addressed, false, `malformed sample ${sample}`);
+  }
+});
+
 function botUpdate(
   overrides: Record<string, unknown> = {},
 ): {
@@ -433,4 +484,15 @@ function stored(result: NormalizedTelegramUpdate) {
   assert.equal(result.ingest, true);
   assert.ok(result.message);
   return result.message;
+}
+
+function mulberry32(seed: number): () => number {
+  return () => {
+    seed |= 0;
+    seed = (seed + 0x6d2b79f5) | 0;
+    let value = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    value =
+      value + Math.imul(value ^ (value >>> 7), 61 | value) ^ value;
+    return ((value ^ (value >>> 14)) >>> 0) / 4_294_967_296;
+  };
 }

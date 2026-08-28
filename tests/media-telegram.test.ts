@@ -1,158 +1,200 @@
 import assert from "node:assert/strict";
-import test from "node:test";
-import sharp from "sharp";
+import { test } from "node:test";
 import type { StoredMessage } from "../src/store.js";
+import { BotMediaError } from "../src/bot/media/contracts.js";
 import {
-  BotImageMediaError,
-  TelegramImageDownloader,
-  parseStoredTelegramImage,
-  selectTelegramImageTarget,
-} from "../src/bot/media/index.js";
-import { BotMediaTools } from "../src/bot/media-tools.js";
+  parseStoredTelegramMedia,
+  selectTelegramMediaTarget,
+} from "../src/bot/media/telegram-media.js";
+import { TelegramMediaDownloader } from "../src/bot/media/telegram-downloader.js";
 
 function stored(rawJson: unknown, messageId = 10): StoredMessage {
   return { chatId: "-100", messageId, text: "", rawJson: JSON.stringify(rawJson) };
 }
 
-async function png(): Promise<Buffer> {
-  return await sharp({
-    create: { width: 2, height: 2, channels: 3, background: "#ff00ff" },
-  }).png().toBuffer();
-}
-
-test("image parser chooses the largest photo and accepts only declared image documents", () => {
-  assert.deepEqual(parseStoredTelegramImage(stored({
+test("media parser selects the largest valid Bot API photo only", () => {
+  const result = parseStoredTelegramMedia(stored({
     photo: [
-      { file_id: "small", width: 2, height: 2, file_size: 10 },
-      { file_id: "large", width: 5, height: 4, file_size: 20 },
-      { file_id: "unsafe/path", width: 100, height: 100 },
+      { file_id: "small_1", width: 50, height: 50, file_size: 80 },
+      { file_id: "invalid/identifier", width: 5_000, height: 5_000 },
+      { file_id: "large_2", width: 800, height: 600, file_size: 1234 },
     ],
-  })), {
-    kind: "photo", fileId: "large", mediaType: "image/jpeg", fileSize: 20, width: 5, height: 4,
+  }));
+
+  assert.deepEqual(result, {
+    kind: "photo",
+    fileId: "large_2",
+    mediaType: "image/jpeg",
+    fileSize: 1234,
+    width: 800,
+    height: 600,
   });
-  assert.deepEqual(parseStoredTelegramImage(stored({
-    document: { file_id: "document_1", mime_type: "image/webp", file_size: 42 },
-  })), {
-    kind: "document", fileId: "document_1", mediaType: "image/webp", fileSize: 42,
-  });
-  assert.equal(parseStoredTelegramImage(stored({
-    document: { file_id: "not_an_image", mime_type: "application/pdf" },
-  })), undefined);
 });
 
-test("image selection is limited to trigger or one embedded same-chat reply", () => {
+test("media target permits trigger or its direct reply, never malformed raw JSON", () => {
+  const trigger = stored({ text: "@bot расшифруй" }, 20);
+  const reply = stored({ voice: { file_id: "voice_1", duration: 4, mime_type: "audio/ogg" } }, 19);
+  assert.deepEqual(selectTelegramMediaTarget(trigger, reply), {
+    kind: "voice",
+    fileId: "voice_1",
+    mediaType: "audio/ogg",
+    mimeType: "audio/ogg",
+    durationSeconds: 4,
+    source: "reply",
+    message: reply,
+  });
+  assert.equal(parseStoredTelegramMedia({ rawJson: "{" }), undefined);
+  assert.equal(parseStoredTelegramMedia({ rawJson: "x".repeat(2_000_001) }), undefined);
+});
+
+test("media parser accepts the full durable Bot API update limit", () => {
+  const result = parseStoredTelegramMedia(stored({
+    padding: "x".repeat(1_200_000),
+    voice: { file_id: "voice_large_raw", duration: 600, mime_type: "audio/ogg" },
+  }));
+  assert.deepEqual(result, {
+    kind: "voice",
+    fileId: "voice_large_raw",
+    mediaType: "audio/ogg",
+    mimeType: "audio/ogg",
+    durationSeconds: 600,
+  });
+});
+
+test("media target recovers the one embedded same-chat reply for privacy-mode delivery", () => {
   const trigger = stored({
-    text: "@bot что тут?",
+    text: "@bot расшифруй",
     reply_to_message: {
-      message_id: 9,
+      message_id: 19,
+      date: 1_780_000_000,
       chat: { id: -100 },
       from: { id: 42, username: "kolya" },
-      document: { file_id: "reply_image", mime_type: "image/png", file_size: 3 },
+      voice: {
+        file_id: "voice_inline_1",
+        duration: 4,
+        mime_type: "audio/ogg",
+      },
     },
-  }, 10);
-  const selected = selectTelegramImageTarget(trigger);
-  assert.equal(selected?.source, "reply");
-  assert.equal(selected?.message.messageId, 9);
-  assert.equal(selected?.fileId, "reply_image");
-  assert.equal(selectTelegramImageTarget(stored({
+  }, 20);
+
+  const target = selectTelegramMediaTarget(trigger);
+  assert.equal(target?.source, "reply");
+  assert.equal(target?.kind, "voice");
+  assert.equal(target?.fileId, "voice_inline_1");
+  assert.equal(target?.message.messageId, 19);
+  assert.equal(target?.message.chatId, "-100");
+  assert.equal(target?.message.senderName, "kolya");
+
+  const otherChat = stored({
     reply_to_message: {
-      message_id: 9, chat: { id: -101 },
-      photo: [{ file_id: "other_chat_photo" }],
+      message_id: 19,
+      chat: { id: -101 },
+      voice: { file_id: "cross_chat", duration: 4 },
     },
-  })), undefined);
+  }, 21);
+  assert.equal(selectTelegramMediaTarget(otherChat), undefined);
 });
 
-test("downloader produces a bounded Responses data URL after decoded MIME validation", async () => {
-  const bytes = await png();
-  let observedFileId = "";
+test("downloader validates metadata and bounds streamed Telegram media", async () => {
   let observedPath = "";
-  const downloader = new TelegramImageDownloader({
-    api: {
-      async getFile(fileId) {
-        observedFileId = fileId;
-        return { filePath: "documents/image.png", fileSize: bytes.byteLength };
-      },
-      async downloadFile(filePath) {
-        observedPath = filePath;
-        return new Response(new Uint8Array(bytes), { headers: { "content-type": "image/png" } });
-      },
+  const downloader = new TelegramMediaDownloader({
+    async getFile(_fileId, signal) {
+      assert.equal(signal.aborted, false);
+      return { filePath: "voice/file.oga", fileSize: 3 };
+    },
+    fileUrl(path) {
+      observedPath = path;
+      return `https://telegram.invalid/${path}`;
+    },
+    async fetch(_url, init) {
+      assert.equal(init?.redirect, "error");
+      return new Response(new Uint8Array([1, 2, 3]), {
+        headers: { "content-type": "audio/ogg" },
+      });
     },
   });
+
   const result = await downloader.download({
-    kind: "document", fileId: "private_file_id", mediaType: "image/png", fileSize: bytes.byteLength,
+    kind: "voice", fileId: "voice_1", mediaType: "audio/ogg", fileSize: 3,
   }, new AbortController().signal);
-  assert.equal(observedFileId, "private_file_id");
-  assert.equal(observedPath, "documents/image.png");
-  assert.match(result.dataUrl, /^data:image\/png;base64,/u);
-  assert.equal(JSON.stringify(result).includes("private_file_id"), false);
-  assert.equal(JSON.stringify(result).includes("documents/image.png"), false);
-});
+  assert.equal(observedPath, "voice/file.oga");
+  assert.deepEqual([...result.data], [1, 2, 3]);
+  assert.equal(result.mediaType, "audio/ogg");
 
-test("downloader rejects an unsafe path, declared MIME mismatch, and a pixel bomb without revealing identifiers", async () => {
-  const image = await png();
-  const cases = [
-    {
-      getFile: async () => ({ filePath: "../secret", fileSize: image.byteLength }),
-      downloadFile: async () => new Response(new Uint8Array(image)),
-      media: { kind: "document" as const, fileId: "hidden_a", mediaType: "image/png" as const, fileSize: image.byteLength },
-    },
-    {
-      getFile: async () => ({ filePath: "safe/image", fileSize: image.byteLength }),
-      downloadFile: async () => new Response(new Uint8Array(image), { headers: { "content-type": "image/jpeg" } }),
-      media: { kind: "document" as const, fileId: "hidden_b", mediaType: "image/png" as const, fileSize: image.byteLength },
-    },
-  ];
-  for (const item of cases) {
-    const downloader = new TelegramImageDownloader({ api: item });
-    await assert.rejects(
-      () => downloader.download(item.media, new AbortController().signal),
-      (error: unknown) => error instanceof BotImageMediaError &&
-        error.code === "invalid_media" && !error.message.includes(item.media.fileId),
-    );
-  }
-  const bomb = await sharp({
-    create: { width: 8_000, height: 8_000, channels: 3, background: "#000000" },
-  }).png().toBuffer();
-  const downloader = new TelegramImageDownloader({
-    api: {
-      async getFile() { return { filePath: "safe/bomb.png", fileSize: bomb.byteLength }; },
-      async downloadFile() { return new Response(new Uint8Array(bomb)); },
-    },
+  const tooSmall = new TelegramMediaDownloader({
+    async getFile() { return { filePath: "voice/file.oga" }; },
+    fileUrl() { return "https://telegram.invalid/file"; },
+    async fetch() { return new Response(new Uint8Array(1_025)); },
+    maxBytes: 1_024,
   });
   await assert.rejects(
-    () => downloader.download({ kind: "document", fileId: "hidden_bomb", mediaType: "image/png", fileSize: bomb.byteLength }, new AbortController().signal),
-    (error: unknown) => error instanceof BotImageMediaError && error.code === "download_failed",
+    () => tooSmall.download({ kind: "voice", fileId: "voice_2", mediaType: "audio/ogg" }, new AbortController().signal),
+    (error: unknown) => error instanceof BotMediaError && error.code === "file_too_large" && !error.message.includes("voice_2"),
   );
 });
 
-test("host media tool returns in-memory data URLs and brackets progress safely", async () => {
-  const bytes = await png();
-  const tools = new BotMediaTools({
-    async getFile() { return { filePath: "safe/image.png", fileSize: bytes.byteLength }; },
-    async downloadFile() { return new Response(new Uint8Array(bytes)); },
+test("downloader never sends unsafe Bot API paths to its URL factory", async () => {
+  let built = false;
+  const downloader = new TelegramMediaDownloader({
+    async getFile() { return { filePath: "../private" }; },
+    fileUrl() { built = true; return "https://telegram.invalid/file"; },
+    async fetch() { return new Response(); },
   });
-  const progress: string[] = [];
-  const images = await tools.resolveImages({
-    trigger: stored({ document: { file_id: "never_visible", mime_type: "image/png", file_size: bytes.byteLength } }),
-    signal: new AbortController().signal,
-    toolProgressPort: {
-      onToolStarted: (event) => { progress.push(`start:${event.toolName}`); },
-      onToolCompleted: (event, ok) => { progress.push(`end:${event.toolName}:${String(ok)}`); },
-    },
-  });
-  assert.equal(images.length, 1);
-  assert.match(images[0]!.dataUrl, /^data:image\/png;base64,/u);
-  assert.deepEqual(progress, ["start:загрузка изображения", "end:загрузка изображения:true"]);
-  assert.equal(JSON.stringify(images).includes("never_visible"), false);
-  const target = tools.findImage(stored({
-    document: { file_id: "another_private_id", mime_type: "image/png", file_size: bytes.byteLength },
-  }));
-  assert.ok(target);
   await assert.rejects(
-    () => tools.resolveImageTargets({
-      targets: [target, target, target, target, target],
-      signal: new AbortController().signal,
-    }),
-    (error: unknown) => error instanceof BotImageMediaError && error.code === "file_too_large",
+    () => downloader.download({ kind: "audio", fileId: "audio_1", mediaType: "audio/mpeg" }, new AbortController().signal),
+    (error: unknown) => error instanceof BotMediaError && error.code === "invalid_media",
   );
+  assert.equal(built, false);
+});
+
+test("downloader rejects a silently truncated Bot API file before conversion", async () => {
+  const downloader = new TelegramMediaDownloader({
+    async getFile() { return { filePath: "video/file.mp4", fileSize: 8 }; },
+    fileUrl() { return "https://telegram.invalid/file"; },
+    async fetch() { return new Response(new Uint8Array([0, 1, 2, 3])); },
+  });
+
+  await assert.rejects(
+    () => downloader.download(
+      { kind: "video_note", fileId: "video_1", mediaType: "video/mp4", fileSize: 8 },
+      new AbortController().signal,
+    ),
+    (error: unknown) => error instanceof BotMediaError && error.code === "download_failed",
+  );
+});
+
+test("downloader preserves the stored Bot API file size when getFile omits it", async () => {
+  const downloader = new TelegramMediaDownloader({
+    async getFile() { return { filePath: "video/file.mp4" }; },
+    fileUrl() { return "https://telegram.invalid/file"; },
+    async fetch() { return new Response(new Uint8Array([0, 1, 2, 3])); },
+  });
+
+  await assert.rejects(
+    () => downloader.download(
+      { kind: "video_note", fileId: "video_1", mediaType: "video/mp4", fileSize: 8 },
+      new AbortController().signal,
+    ),
+    (error: unknown) => error instanceof BotMediaError && error.code === "download_failed" &&
+      !error.message.includes("video_1"),
+  );
+});
+
+test("downloader rejects Bot API metadata that points at a different-size file", async () => {
+  let fetched = false;
+  const downloader = new TelegramMediaDownloader({
+    async getFile() { return { filePath: "video/file.mp4", fileSize: 7 }; },
+    fileUrl() { return "https://telegram.invalid/file"; },
+    async fetch() { fetched = true; return new Response(new Uint8Array(7)); },
+  });
+
+  await assert.rejects(
+    () => downloader.download(
+      { kind: "video_note", fileId: "video_1", mediaType: "video/mp4", fileSize: 8 },
+      new AbortController().signal,
+    ),
+    (error: unknown) => error instanceof BotMediaError && error.code === "download_failed" &&
+      !error.message.includes("video_1"),
+  );
+  assert.equal(fetched, false);
 });

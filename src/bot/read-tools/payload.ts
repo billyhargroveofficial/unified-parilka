@@ -3,7 +3,6 @@ import type { StoredMessage } from "../../store.js";
 import { isCalendarDay } from "./calendar.js";
 import {
   MAX_BOT_READ_TOOL_OUTPUT_CHARS,
-  MAX_LOAD_CHAT_SKILL_OUTPUT_CHARS,
   MAX_FIND_CHAT_MESSAGES_OUTPUT_CHARS,
   MAX_READ_CHAT_SLICE_OUTPUT_CHARS,
   type BotReadToolFailure,
@@ -21,9 +20,6 @@ import {
  * transcript of hundreds of short messages reaches the model in one call.
  */
 export function maxReadToolOutputChars(tool: BotReadToolName): number {
-  if (tool === "load_chat_skill") {
-    return MAX_LOAD_CHAT_SKILL_OUTPUT_CHARS;
-  }
   if (tool === "read_chat_slice") {
     return MAX_READ_CHAT_SLICE_OUTPUT_CHARS;
   }
@@ -157,7 +153,11 @@ export function deduplicateEvidence(
     const key =
       item.source === "chat_message"
         ? `chat:${item.chat?.id}:${item.message?.id}`
-        : `digest:${item.chat?.id}:${item.range?.dayFrom}:${item.range?.dayTo}:${item.text}`;
+        : item.source === "web" || item.source === "paper"
+          ? `${item.source}:${item.url}:${item.text}`
+          : item.source === "research"
+            ? `research:${item.date}:${item.text}`
+            : `digest:${item.chat?.id}:${item.range?.dayFrom}:${item.range?.dayTo}:${item.text}`;
     if (seen.has(key)) {
       return false;
     }

@@ -1,0 +1,11 @@
+# Parilka Hermes profile distribution — crowded Telegram group Парилка228.
+# Installed into ~/.hermes/profiles/parilka/
+hermes_requires: ">=0.20.0"
+name: parilka
+display_name: "Parilka228 Chat Agent"
+description: >
+  Single-group Telegram agent for Парилка228 (-1003179772905).
+  Cache-only read tools via loopback Parilka MCP bridge. No file/terminal/code.
+  Strict single-chat guard; unauthorized DMs are ignored.
+version: "1.0.0"
+kind: profile

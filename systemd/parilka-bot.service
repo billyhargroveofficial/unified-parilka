@@ -1,44 +1,25 @@
 [Unit]
-Description=Parilka durable Telegram Bot API owner with direct Codex subscription Responses
+Description=Parilka durable Telegram bot
 Documentation=file:%h/repos/parilka-unified/README.md
 After=network-online.target parilka-sync.service
 Wants=network-online.target parilka-sync.service
-# This prevents two Bot API pollers during the one-owner cutover; it is not a
-# runtime dependency on the old gateway.
-Conflicts=hermes-gateway-parilka.service
-# Conflicts= alone does not order the stop and start jobs. Keep an explicit
-# ordering edge so an accidental direct start cannot overlap token ownership.
-After=hermes-gateway-parilka.service
 StartLimitIntervalSec=10min
 StartLimitBurst=5
 
 [Service]
 Type=simple
 WorkingDirectory=%h/repos/parilka-unified
-# Bot API ownership does not require MTProto API credentials or sessions.
-# Load only the Bot API slice so MTProto credentials never enter this process.
-# It is required: a missing or malformed slice must fail before token ownership.
-EnvironmentFile=%h/.config/parilka/parilka-bot-codex.env
-ExecStartPre=%h/repos/parilka-unified/bin/telegram-parilka-mcp-check-build %h/repos/parilka-unified %h/repos/parilka-unified/.deploy/responses-current/bot-daemon.js
-# Validate the direct Codex-subscription configuration before the unit can take
-# Bot API ownership. The shared owner-only OAuth state is supplied at the final
-# exec seam, so the private slice cannot redirect it.
-ExecStartPre=/usr/bin/env NODE_ENV=production TELEGRAM_PROJECT_DIR=%h/repos/parilka-unified PARILKA_BOT_LOCK_FILE=%h/.telegram-parilka-mcp/parilka-bot.lock PARILKA_BOT_ENTRYPOINT=%h/repos/parilka-unified/.deploy/responses-current/bot-daemon.js PARILKA_BOT_CODEX_AUTH_FILE=%h/.telegram-parilka-mcp/codex-subscription/auth.json %h/repos/parilka-unified/bin/parilka-bot --preflight
-# EnvironmentFile= wins over Environment= in systemd. Set every unit-owned
-# value through env at the final exec seam, so a private slice can configure
-# the bot but cannot replace its lock or shared OAuth state path.
-ExecStart=/usr/bin/env NODE_ENV=production TELEGRAM_PROJECT_DIR=%h/repos/parilka-unified PARILKA_BOT_LOCK_FILE=%h/.telegram-parilka-mcp/parilka-bot.lock PARILKA_BOT_ENTRYPOINT=%h/repos/parilka-unified/.deploy/responses-current/bot-daemon.js PARILKA_BOT_CODEX_AUTH_FILE=%h/.telegram-parilka-mcp/codex-subscription/auth.json %h/repos/parilka-unified/bin/parilka-bot
+EnvironmentFile=-%h/.config/telegram-mcp/.env
+EnvironmentFile=-%h/.config/parilka/parilka.env
+Environment=NODE_ENV=production
+Environment=TELEGRAM_PROJECT_DIR=%h/repos/parilka-unified
+ExecStartPre=%h/repos/parilka-unified/bin/telegram-parilka-mcp-check-build %h/repos/parilka-unified %h/repos/parilka-unified/dist/bot-daemon.js
+ExecStart=%h/repos/parilka-unified/bin/parilka-bot
 Restart=on-failure
 RestartSec=10s
-# Signal only the lock-owning wrapper during the graceful phase. It forwards
-# one SIGTERM to the daemon; control-group mode would signal the daemon too and
-# can race into a duplicate SIGTERM before its first graceful drain completes.
-KillMode=mixed
-# Covers the bounded build/configuration preflight. The user-manager default
-# (normally 90s) leaves too little margin.
-TimeoutStartSec=2min
-# The daemon permits a 660-second graceful turn/outbox drain.
-TimeoutStopSec=12min
+# Runtime drain is configurable up to 15 minutes. Give systemd one extra
+# minute so a graceful stop is not converted into SIGKILL at the boundary.
+TimeoutStopSec=16min
 UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true

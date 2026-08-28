@@ -13,7 +13,7 @@ runbooks находятся вне `docs/`.
 
 ## Decisions
 
-- [ADR index](adr/README.md): решения 0001–0004 и dated migration addenda.
+- [ADR index](adr/README.md): решения 0001–0003.
 
 ## Outside `docs/`
 

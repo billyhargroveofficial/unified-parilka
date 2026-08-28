@@ -159,7 +159,7 @@ const sourceMessageIdSchema = z
  * surfaces as an MCP protocol error, and invalid tool arguments keep MCP
  * isError. Typed operational BotRead failures pass through jsonCacheReadResult
  * as a normal MCP response with the structured {ok:false, error:{code…}}
- * envelope so the model host can act on the code instead of an opaque error.
+ * envelope so Hermes can act on the code instead of an opaque error.
  */
 async function cacheReadTool(
   context: TelegramToolContext,

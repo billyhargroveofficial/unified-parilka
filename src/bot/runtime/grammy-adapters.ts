@@ -1,96 +1,62 @@
+import type { Api } from "grammy";
 import type { ChatInfo } from "../../telegram/types.js";
 import type { StoredMessage } from "../../store.js";
-import {
-  GrammyBotTurnPublisher,
-  type GrammyBotApiPort,
-} from "../grammy-publisher.js";
+import { GrammyBotTurnPublisher, type GrammyBotApiPort } from "../grammy-publisher.js";
+import type { BotRuntimeConfig } from "../runtime-config.js";
 import type { ToolProgressBotApiPort } from "../tool-progress.js";
+import { BotMediaError } from "../media/contracts.js";
+import { TelegramMediaDownloader } from "../media/telegram-downloader.js";
 import type { OwnSendStore } from "./contracts.js";
-import type {
-  BotApiLongPollerOptions,
-  TelegramLongPollingApiPort,
-} from "./long-poller.js";
-import {
-  asRecord,
-  botApiDate,
-  BotRuntimeProtocolError,
-  normalizeExpectedUsername,
-  positiveSafeInteger,
-  positiveTelegramId,
-  stringifyUpdate,
-  telegramId,
-} from "./helpers.js";
+import type { BotApiLongPollerOptions, GrammyLongPollingApiPort } from "./long-poller.js";
+import { asRecord, botApiDate, BotRuntimeProtocolError, normalizeExpectedUsername, positiveSafeInteger, positiveTelegramId, stringifyUpdate, telegramId } from "./helpers.js";
 
-/**
- * Minimal Bot API surface required by the durable runtime. An implementation
- * may use native fetch, but no framework types or framework runtime are part
- * of this boundary.
- */
-export interface TelegramBotApiPort extends GrammyBotApiPort {
-  /** Sends a validated, presentation-only message that never enters the corpus. */
-  sendTransientMessage(
-    chatId: string,
-    text: string,
-    signal: AbortSignal,
-  ): Promise<unknown>;
-  sendChatAction(chatId: string, signal: AbortSignal): Promise<void>;
-  getMe(signal: AbortSignal): Promise<unknown>;
-  deleteWebhook(
-    options: { drop_pending_updates: false },
-    signal: AbortSignal,
-  ): Promise<unknown>;
-  getUpdates(
-    options: {
-      offset?: number;
-      timeout: number;
-      limit: number;
-      allowed_updates: readonly ("message" | "edited_message")[];
-    },
-    signal: AbortSignal,
-  ): Promise<unknown>;
-  editMessageText(
-    chatId: string,
-    messageId: number,
-    text: string,
-    signal: AbortSignal,
-  ): Promise<unknown>;
-  deleteMessage(
-    chatId: string,
-    messageId: number,
-    signal: AbortSignal,
-  ): Promise<unknown>;
-}
-
-export function createTelegramLongPollingApi(
-  api: Pick<TelegramBotApiPort, "getMe" | "deleteWebhook" | "getUpdates">,
-): TelegramLongPollingApiPort {
+export function createGrammyLongPollingApi(
+  api: Pick<Api, "getMe" | "deleteWebhook" | "getUpdates">,
+): GrammyLongPollingApiPort {
   return {
-    getMe: (signal) => api.getMe(signal),
-    deleteWebhook: (options, signal) => api.deleteWebhook(options, signal),
-    getUpdates: (options, signal) => api.getUpdates(options, signal),
+    getMe: (signal) =>
+      api.getMe(
+        signal as unknown as Parameters<Api["getMe"]>[0],
+      ),
+    deleteWebhook: (options, signal) =>
+      api.deleteWebhook(
+        options,
+        signal as unknown as Parameters<Api["deleteWebhook"]>[1],
+      ),
+    getUpdates: (options, signal) =>
+      api.getUpdates(
+        options,
+        signal as unknown as Parameters<Api["getUpdates"]>[1],
+      ),
   };
 }
 
-export interface DurableTelegramPublisherOptions {
+export interface DurableGrammyPublisherOptions {
   store: OwnSendStore;
   botId: string;
   botUsername: string;
 }
 
 /**
- * Records every acknowledged outgoing message before delivery control returns
- * to the worker. A recording error after dispatch remains an unknown-delivery
- * fence and cannot trigger an automatic resend.
+ * Wraps the real send operation so every acknowledged bot message is inserted
+ * into the shared corpus before control returns to BotTurnWorker. A recording
+ * failure happens after network dispatch and therefore becomes lost_ack, never
+ * an automatic resend.
  */
-export function createDurableTelegramBotTurnPublisher(
-  api: Pick<TelegramBotApiPort, "sendRichMessage" | "sendMessage">,
-  options: DurableTelegramPublisherOptions,
+export function createDurableGrammyBotTurnPublisher(
+  api: Pick<Api, "sendRichMessage" | "sendMessage">,
+  options: DurableGrammyPublisherOptions,
 ): GrammyBotTurnPublisher {
   const botId = positiveTelegramId(options.botId, "botId");
   const botUsername = normalizeExpectedUsername(options.botUsername);
   const port: GrammyBotApiPort = {
     async sendRichMessage(input) {
-      const response = await api.sendRichMessage(input);
+      const response = await api.sendRichMessage(
+        input.chatId,
+        input.richMessage as unknown as Parameters<Api["sendRichMessage"]>[1],
+        input.options as unknown as Parameters<Api["sendRichMessage"]>[2],
+        input.signal as unknown as Parameters<Api["sendRichMessage"]>[3],
+      );
       recordOwnSend(options.store, {
         response,
         requestedChatId: input.chatId,
@@ -102,16 +68,17 @@ export function createDurableTelegramBotTurnPublisher(
       return response;
     },
     async sendMessage(chatId, text, sendOptions, signal) {
-      const response = await api.sendMessage(chatId, text, sendOptions, signal);
-      const replyToMessageId = sendOptions?.reply_parameters.message_id;
-      if (replyToMessageId === undefined) {
-        throw new BotRuntimeProtocolError("OWN_SEND_REQUEST_MALFORMED");
-      }
+      const response = await api.sendMessage(
+        chatId,
+        text,
+        sendOptions as unknown as Parameters<Api["sendMessage"]>[2],
+        signal as unknown as Parameters<Api["sendMessage"]>[3],
+      );
       recordOwnSend(options.store, {
         response,
         requestedChatId: chatId,
         text,
-        replyToMessageId,
+        replyToMessageId: sendOptions.reply_parameters.message_id,
         botId,
         botUsername,
       });
@@ -121,33 +88,38 @@ export function createDurableTelegramBotTurnPublisher(
   return new GrammyBotTurnPublisher(port);
 }
 
-/** Best-effort adapter for the presentation-only progress message. */
-export function createToolProgressTelegramBotApiPort(
-  api: Pick<
-    TelegramBotApiPort,
-    "sendTransientMessage" | "sendChatAction" | "editMessageText" | "deleteMessage"
-  >,
+/**
+ * Best-effort Bot API port for the ephemeral tool-progress message.
+ *
+ * Failures are surfaced as `{ ok: false }` so the publisher can keep durable
+ * turn state independent of Telegram presentation.
+ */
+export function createToolProgressGrammyBotApiPort(
+  api: Pick<Api, "sendMessage" | "editMessageText" | "deleteMessage">,
 ): ToolProgressBotApiPort {
   return {
     async sendMessage(chatId, text, signal) {
       try {
-        const message = await api.sendTransientMessage(
+        const message = await api.sendMessage(
           chatId,
           text,
-          signal,
+          undefined as unknown as Parameters<Api["sendMessage"]>[2],
+          signal as unknown as Parameters<Api["sendMessage"]>[3],
         );
-        const messageId = positiveSafeInteger(asRecord(message)?.message_id);
-        if (messageId === undefined) return { ok: false };
-        pulseTypingAfterProgress(api, chatId, signal);
-        return { ok: true, messageId };
+        return { ok: true, messageId: message.message_id };
       } catch {
         return { ok: false };
       }
     },
     async editMessageText(chatId, messageId, text, signal) {
       try {
-        await api.editMessageText(chatId, messageId, text, signal);
-        pulseTypingAfterProgress(api, chatId, signal);
+        await api.editMessageText(
+          chatId,
+          messageId,
+          text,
+          undefined as unknown as Parameters<Api["editMessageText"]>[3],
+          signal as unknown as Parameters<Api["editMessageText"]>[4],
+        );
         return { ok: true };
       } catch {
         return { ok: false };
@@ -155,74 +127,58 @@ export function createToolProgressTelegramBotApiPort(
     },
     async deleteMessage(chatId, messageId, signal) {
       try {
-        await api.deleteMessage(chatId, messageId, signal);
+        await api.deleteMessage(
+          chatId,
+          messageId,
+          signal as unknown as Parameters<Api["deleteMessage"]>[2],
+        );
         return { ok: true };
-      } catch (error) {
-        // Deletion is idempotent presentation cleanup. Telegram's definitive
-        // "not found" means the bubble is already absent and the durable fence
-        // must be cleared instead of retried forever.
-        if (telegramMessageAlreadyAbsent(error)) {
-          return { ok: true };
-        }
-        // A known permanent refusal (for example a message outside Telegram's
-        // deletion window) cannot be repaired by the next worker loop. Retire
-        // only the terminal presentation fence; delivery state is untouched.
-        return telegramMessageCannotBeDeleted(error)
-          ? { ok: false, terminal: true }
-          : { ok: false };
+      } catch {
+        return { ok: false };
       }
     },
   };
 }
 
 /**
- * Telegram clears a native chat action as soon as the bot sends or edits a
- * message. Re-pulse it after each visible progress update so the header keeps
- * saying that the bot is typing while the model continues to work. This is
- * deliberately fire-and-forget: presentation polish cannot add turn latency
- * or change the durable progress result.
+ * Builds the only component that can turn a Bot API file reference into bytes.
+ * The authenticated URL is constructed here, after the downloader has
+ * validated Telegram's file path, and never crosses into an agent/model
+ * prompt, result, or log record.
  */
-function pulseTypingAfterProgress(
-  api: Pick<TelegramBotApiPort, "sendChatAction">,
-  chatId: string,
-  signal: AbortSignal,
-): void {
-  try {
-    void api.sendChatAction(chatId, signal).catch(() => undefined);
-  } catch {
-    // A synchronous test double or adapter failure is presentation-only too.
+export function createGrammyTelegramMediaDownloader(
+  api: Pick<Api, "getFile">,
+  botToken: string,
+): TelegramMediaDownloader {
+  if (!/^\d{1,16}:[A-Za-z0-9_-]{20,}$/u.test(botToken)) {
+    throw new TypeError("Bot token has an invalid shape.");
   }
+  return new TelegramMediaDownloader({
+    async getFile(fileId, signal) {
+      const file = await api.getFile(
+        fileId,
+        signal as unknown as Parameters<Api["getFile"]>[1],
+      );
+      if (typeof file.file_path !== "string") {
+        throw new BotMediaError(
+          "invalid_media",
+          "Telegram returned an invalid media descriptor.",
+        );
+      }
+      return {
+        filePath: file.file_path,
+        ...(typeof file.file_size === "number"
+          ? { fileSize: file.file_size }
+          : {}),
+      };
+    },
+    fileUrl: (filePath) =>
+      `https://api.telegram.org/file/bot${botToken}/${filePath}`,
+  });
 }
 
-function telegramMessageAlreadyAbsent(error: unknown): boolean {
-  if (typeof error !== "object" || error === null) return false;
-  const rejected = error as { error_code?: unknown; description?: unknown };
-  return rejected.error_code === 400 &&
-    typeof rejected.description === "string" &&
-    rejected.description.trim().toLocaleLowerCase("en-US").endsWith("message to delete not found");
-}
-
-function telegramMessageCannotBeDeleted(error: unknown): boolean {
-  if (typeof error !== "object" || error === null) return false;
-  const rejected = error as { error_code?: unknown; description?: unknown };
-  if (rejected.error_code !== 400 || typeof rejected.description !== "string") {
-    return false;
-  }
-  const description = rejected.description.trim().toLocaleLowerCase("en-US");
-  return description.endsWith("message can't be deleted") ||
-    description.endsWith("message can't be deleted for everyone");
-}
-
-export function botRuntimeOptions(
-  input: Readonly<{
-    botId: string;
-    botUsername: string;
-    initialOffset?: number;
-    pollTimeoutSec: number;
-    pollLimit: number;
-    pollBackoffInitialMs: number;
-    pollBackoffMaxMs: number;
-  }>,
+export function botRuntimeOptionsFromConfig(
+  config: Readonly<BotRuntimeConfig>,
 ): Pick<
   BotApiLongPollerOptions,
   | "expectedBotId"
@@ -234,13 +190,15 @@ export function botRuntimeOptions(
   | "backoffMaxMs"
 > {
   return {
-    expectedBotId: input.botId,
-    expectedBotUsername: input.botUsername,
-    ...(input.initialOffset === undefined ? {} : { initialOffset: input.initialOffset }),
-    pollTimeoutSec: input.pollTimeoutSec,
-    pollLimit: input.pollLimit,
-    backoffInitialMs: input.pollBackoffInitialMs,
-    backoffMaxMs: input.pollBackoffMaxMs,
+    expectedBotId: config.botId,
+    expectedBotUsername: config.botUsername,
+    ...(config.initialOffset === undefined
+      ? {}
+      : { initialOffset: config.initialOffset }),
+    pollTimeoutSec: config.pollTimeoutSec,
+    pollLimit: config.pollLimit,
+    backoffInitialMs: config.pollBackoffInitialMs,
+    backoffMaxMs: config.pollBackoffMaxMs,
   };
 }
 
@@ -268,29 +226,41 @@ function recordOwnSend(
     throw new BotRuntimeProtocolError("OWN_SEND_RESPONSE_MALFORMED");
   }
   const responseSenderId = telegramId(asRecord(response.from)?.id);
-  if (responseSenderId !== undefined && responseSenderId !== input.botId) {
+  if (
+    responseSenderId !== undefined &&
+    responseSenderId !== input.botId
+  ) {
     throw new BotRuntimeProtocolError("OWN_SEND_IDENTITY_MISMATCH");
   }
 
   const cachedChat = store.getCachedChat(input.requestedChatId);
-  const chat: ChatInfo = cachedChat ?? {
-    chatId: input.requestedChatId,
-    requested: input.requestedChatId,
-    kind: typeof responseChat?.type === "string" ? responseChat.type : "unknown",
-    ...(typeof responseChat?.title === "string" ? { title: responseChat.title } : {}),
-    ...(typeof responseChat?.username === "string" ? { username: responseChat.username } : {}),
-  };
+  const chat: ChatInfo =
+    cachedChat ?? {
+      chatId: input.requestedChatId,
+      requested: input.requestedChatId,
+      kind:
+        typeof responseChat?.type === "string"
+          ? responseChat.type
+          : "unknown",
+      ...(typeof responseChat?.title === "string"
+        ? { title: responseChat.title }
+        : {}),
+      ...(typeof responseChat?.username === "string"
+        ? { username: responseChat.username }
+        : {}),
+    };
   const date = botApiDate(response.date);
   const rawJson = stringifyUpdate(response);
-  const message: StoredMessage = {
-    chatId: input.requestedChatId,
-    messageId,
-    ...(date === undefined ? {} : { date }),
-    senderId: input.botId,
-    senderName: input.botUsername,
-    text: input.text,
-    replyToMessageId: input.replyToMessageId,
-    ...(rawJson === undefined ? {} : { rawJson }),
-  };
-  store.upsertMessages(chat, [message]);
+  store.upsertMessages(chat, [
+    {
+      chatId: input.requestedChatId,
+      messageId,
+      ...(date === undefined ? {} : { date }),
+      senderId: input.botId,
+      senderName: input.botUsername,
+      text: input.text,
+      replyToMessageId: input.replyToMessageId,
+      ...(rawJson === undefined ? {} : { rawJson }),
+    },
+  ]);
 }

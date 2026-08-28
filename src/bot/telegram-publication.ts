@@ -1,5 +1,3 @@
-import { markdownToReadablePlainText } from "./telegram-markdown-plain.js";
-
 /** Telegram's documented classic `sendMessage` UTF-16 text payload limit. */
 export const TELEGRAM_TEXT_LIMIT_UTF16 = 4_096;
 
@@ -9,14 +7,13 @@ export const TELEGRAM_RICH_TEXT_LIMIT_UTF8 = 32_768;
 /**
  * The exact model result that crosses the Telegram send boundary.
  *
- * This is deliberately a transport contract, not a content policy. It applies
- * deterministic Markdown table-block normalization before mode selection.
- * Rich publications retain Markdown for the native path, but always carry a
- * separately projected readable plain-text fallback.
- * This matters when Telegram rejects the native parser: classic sendMessage
- * must never expose raw formatting syntax to the chat. The Rich Message byte
- * limit applies to the normalized Markdown; local audio and replies beyond
- * that limit use the classic plain path, which the publisher splits losslessly.
+ * This is deliberately a transport contract, not a content policy. The only
+ * rewrite is the deterministic Markdown table-block normalization applied
+ * before mode selection: rich and plain publications always carry the same
+ * normalized visible content, and the Rich Message byte limit applies to it.
+ * Model replies within the native Rich Message limit use the rich path; local
+ * audio and replies beyond that limit use the classic plain path, which the
+ * publisher splits losslessly.
  */
 export type TelegramPublication =
   | {
@@ -36,24 +33,20 @@ export function createTelegramPublication(
   responseOrigin?: "local_audio",
 ): TelegramPublication {
   const normalized = normalizeTelegramMarkdownTables(text);
-  // A model answer is normally non-empty. A Markdown-only answer (for example
-  // just "***") has no visible text, so retain a small readable placeholder
-  // rather than construct an invalid Telegram publication with an empty body.
-  const plainText = markdownToReadablePlainText(normalized) || "—";
   if (
     responseOrigin === "local_audio" ||
     utf8Length(normalized) > TELEGRAM_RICH_TEXT_LIMIT_UTF8
   ) {
     return {
       mode: "plain",
-      plainText,
+      plainText: normalized,
       maxChunkUtf16: TELEGRAM_TEXT_LIMIT_UTF16,
     };
   }
   return {
     mode: "rich",
     markdown: normalized,
-    plainText,
+    plainText: normalized,
     maxChunkUtf16: TELEGRAM_TEXT_LIMIT_UTF16,
   };
 }

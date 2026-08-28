@@ -7,6 +7,7 @@ import { test } from "node:test";
 import {
   MAX_FAST_CHAT_MEMORY_ITEMS,
 } from "../src/storage/chat-knowledge.js";
+import { SCHEMA_VERSION } from "../src/storage/constants.js";
 import { MessageStore } from "../src/store.js";
 
 const CHAT_A = "-1003179772905";
@@ -159,7 +160,7 @@ test("version 15 database upgrades chat knowledge once and stays idempotent", (t
 
   const migrated = new MessageStore(dbPath);
   try {
-    assert.equal(migrated.getSchemaVersion(), 24);
+    assert.equal(migrated.getSchemaVersion(), SCHEMA_VERSION);
     migrated.upsertChatLesson({
       chatId: CHAT_A,
       title: "Migration lesson",
@@ -175,7 +176,7 @@ test("version 15 database upgrades chat knowledge once and stays idempotent", (t
 
   const reopened = new MessageStore(dbPath);
   try {
-    assert.equal(reopened.getSchemaVersion(), 24);
+    assert.equal(reopened.getSchemaVersion(), SCHEMA_VERSION);
     assert.equal(reopened.listChatLessons(CHAT_A).length, 1);
   } finally {
     reopened.close();

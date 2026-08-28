@@ -2,10 +2,14 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DreamConsolidator } from "../../src/dream/consolidator.js";
+import type { DigestModelRouter } from "../../src/digests.js";
 import { MessageStore } from "../../src/store.js";
 import type { StoredMessage } from "../../src/store.js";
+import {
+  ModelRouter,
+  type ResolvedModelCandidate,
+} from "../../src/providers/model-router.js";
 import type { DreamReviewModelOutput } from "../../src/dream/review.js";
-import type { DreamTextRunner } from "../../src/dream/text-runner.js";
 
 export const DREAM_CHAT_ID = "-1003179772905";
 export const DREAM_BOT_SENDER_ID = "100000000";
@@ -45,26 +49,68 @@ export function dreamFixtureStore(prefix = "parilka-dream-") {
   };
 }
 
-export function dreamFakeTextRunner(
+export function dreamFakeRouter(
   output: DreamReviewModelOutput,
-): DreamTextRunner {
+): DigestModelRouter {
   return {
-    async runText() {
+    async executeWithFallback<T>() {
       return {
-        ...output,
-        model: "gpt-5.6-luna",
-        providerId: "openai-responses",
+        value: output as T,
+        candidate: {
+          reference: "provider/model",
+          providerId: "provider",
+          modelId: "model",
+          model: {} as ResolvedModelCandidate["model"],
+          capabilities: { vision: false },
+        },
+        attempt: 1,
+        failures: [],
       };
     },
   };
 }
 
-/** DOM-style abort: AbortError with the numeric DOM code 20. */
+export const DREAM_ROUTER_FIXTURE_ENV = {
+  DREAM_TIMEOUT_TEST_KEY: "local-fixture-key",
+} as const;
+
+/**
+ * Real ModelRouter fixture: unlike a hand-rolled fake it must invoke the
+ * attempt callback and runs the production classifyModelFallback path.
+ * The provider base URL is never dialed because generate is faked.
+ */
+export function dreamTimeoutRouter(
+  summaryCandidates: readonly string[],
+): ModelRouter {
+  return new ModelRouter(
+    {
+      allowInsecureLocal: false,
+      providers: [
+        {
+          id: "timeouttest",
+          protocol: "openai",
+          baseUrl: "https://timeout.example.test/v1",
+          apiKeyEnv: "DREAM_TIMEOUT_TEST_KEY",
+        },
+      ],
+      modelCapabilities: Object.fromEntries(
+        summaryCandidates.map((reference) => [reference, { vision: false }]),
+      ),
+      roles: {
+        turn: [summaryCandidates[0]],
+        summary: [...summaryCandidates],
+      },
+    },
+    { env: { ...DREAM_ROUTER_FIXTURE_ENV } },
+  );
+}
+
+/** DOM-style provider abort: AbortError with the numeric DOM code 20. */
 export function dreamDomAbortError(): Error {
   return new DOMException("The operation was aborted.", "AbortError");
 }
 
-/** Node-style abort: AbortError with the ABORT_ERR string code. */
+/** Node-style provider abort: AbortError with the ABORT_ERR string code. */
 export function dreamNodeAbortError(): Error {
   return Object.assign(new Error("The operation was aborted."), {
     name: "AbortError",
@@ -151,11 +197,7 @@ export function seedDreamTwoBatches(store: MessageStore): void {
 }
 
 export function makeDreamConsolidator(
-  textRunner: DreamTextRunner = dreamFakeTextRunner({
-    text: "memory",
-    toolCalls: 0,
-    finishReason: "stop",
-  }),
+  router: DigestModelRouter,
   options: {
     maxInputChars?: number;
     maxMemoryChars?: number;
@@ -167,7 +209,7 @@ export function makeDreamConsolidator(
   } = {},
 ): DreamConsolidator {
   return new DreamConsolidator({
-    textRunner,
+    router,
     botSenderId: DREAM_BOT_SENDER_ID,
     maxInputChars: options.maxInputChars ?? 120_000,
     maxMemoryChars: options.maxMemoryChars ?? 2_000,

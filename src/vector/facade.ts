@@ -1,8 +1,8 @@
+import type { AppConfig } from "../config.js";
 import type {
   KeywordSearchHit,
   MessageStore,
 } from "../store.js";
-import type { EmbeddingRuntimeConfig } from "../embeddings.js";
 import {
   createVectorBackend,
   type VectorBackend,
@@ -37,7 +37,7 @@ export class VectorRag {
   readonly #searcher: VectorSearcher;
 
   constructor(
-    config: EmbeddingRuntimeConfig,
+    config: AppConfig,
     store: MessageStore,
   ) {
     this.#backend = createVectorBackend(config);

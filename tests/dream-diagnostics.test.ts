@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { safeDreamErrorCode } from "../src/dream/diagnostics.js";
+import { ModelRoutingError } from "../src/providers/model-router.js";
 import {
   DREAM_CHAT_ID,
   DREAM_YESTERDAY,
   capturingDreamLogger,
-  dreamFakeTextRunner,
+  dreamFakeRouter,
   dreamFixtureStore,
   dreamNow,
   makeDreamConsolidator,
@@ -26,7 +27,20 @@ test("safeDreamErrorCode prefers ETIMEDOUT over nested AbortError DOM code 20", 
     new Error("Dream review candidate timed out.", { cause: abort }),
     { code: "ETIMEDOUT" },
   );
-  const routing = routedError("transport", timedOut);
+  const routing = new ModelRoutingError(
+    "candidates_exhausted",
+    "summary",
+    [
+      {
+        candidate: "provider/model",
+        providerId: "provider",
+        modelId: "model",
+        attempt: 1,
+        decision: { fallback: true, reason: "transport" },
+      },
+    ],
+    timedOut,
+  );
   assert.equal(
     safeDreamErrorCode(routing),
     "candidates_exhausted:transport:ETIMEDOUT",
@@ -43,7 +57,20 @@ test("safeDreamErrorCode prefers outer ETIMEDOUT over nested ABORT_ERR", () => {
     new Error("Dream review candidate timed out.", { cause: abort }),
     { code: "ETIMEDOUT" },
   );
-  const routing = routedError("transport", timedOut);
+  const routing = new ModelRoutingError(
+    "candidates_exhausted",
+    "summary",
+    [
+      {
+        candidate: "provider/model",
+        providerId: "provider",
+        modelId: "model",
+        attempt: 1,
+        decision: { fallback: true, reason: "transport" },
+      },
+    ],
+    timedOut,
+  );
   assert.equal(
     safeDreamErrorCode(routing),
     "candidates_exhausted:transport:ETIMEDOUT",
@@ -52,8 +79,18 @@ test("safeDreamErrorCode prefers outer ETIMEDOUT over nested ABORT_ERR", () => {
 });
 
 test("safeDreamErrorCode keeps invalid_output shortening diagnostic", () => {
-  const routing = routedError(
-    "invalid_output",
+  const routing = new ModelRoutingError(
+    "candidates_exhausted",
+    "summary",
+    [
+      {
+        candidate: "provider/model",
+        providerId: "provider",
+        modelId: "model",
+        attempt: 1,
+        decision: { fallback: true, reason: "invalid_output" },
+      },
+    ],
     Object.assign(new Error("still too large"), {
       name: "BotAgentProtocolError",
       code: "shortening_output_too_large",
@@ -67,8 +104,18 @@ test("safeDreamErrorCode keeps invalid_output shortening diagnostic", () => {
 });
 
 test("safeDreamErrorCode falls back to pure numeric only when no semantic code", () => {
-  const routing = routedError(
-    "transport",
+  const routing = new ModelRoutingError(
+    "candidates_exhausted",
+    "summary",
+    [
+      {
+        candidate: "provider/model",
+        providerId: "provider",
+        modelId: "model",
+        attempt: 1,
+        decision: { fallback: true, reason: "transport" },
+      },
+    ],
     Object.assign(new Error("aborted"), {
       name: "AbortError",
       code: 20,
@@ -94,7 +141,7 @@ test("dream progress logs success sequence without content leakage", async () =>
     });
 
     const result = await makeDreamConsolidator(
-      dreamFakeTextRunner({ text: "ok", toolCalls: 2, finishReason: "stop" }),
+      dreamFakeRouter({ text: "ok", toolCalls: 2, finishReason: "stop" }),
       {
         logger,
         runReview: async () => ({
@@ -173,11 +220,25 @@ test("dream progress logs batch failure with safe ETIMEDOUT code", async () => {
       new Error("Dream review candidate timed out.", { cause: abort }),
       { code: "ETIMEDOUT" },
     );
-    const routingError = () => routedError("transport", timedOut);
+    const routingError = () =>
+      new ModelRoutingError(
+        "candidates_exhausted",
+        "summary",
+        [
+          {
+            candidate: "provider/model",
+            providerId: "provider",
+            modelId: "model",
+            attempt: 1,
+            decision: { fallback: true, reason: "transport" },
+          },
+        ],
+        timedOut,
+      );
 
     let call = 0;
     const result = await makeDreamConsolidator(
-      dreamFakeTextRunner({ text: "ok", toolCalls: 0, finishReason: "stop" }),
+      dreamFakeRouter({ text: "ok", toolCalls: 0, finishReason: "stop" }),
       {
       maxInputChars: 90_000,
       logger,
@@ -243,12 +304,13 @@ test("runDreamPass injects logger into DreamConsolidator", async () => {
         chatId: DREAM_CHAT_ID,
         apply: true,
         botId: "100000000",
+        modelConfigPath: "/tmp/unused.json",
         modelTotalTimeoutMs: 300_000,
         modelCandidateTimeoutMs: 60_000,
         memoryMaxChars: 2_000,
         now: dreamNow,
       },
-      dreamFakeTextRunner({ text: "ok", toolCalls: 0, finishReason: "stop" }),
+      dreamFakeRouter({ text: "ok", toolCalls: 0, finishReason: "stop" }),
       logger,
     );
     assert.equal(result.status, "success");
@@ -273,12 +335,13 @@ test("runDreamPass without logger stays silent", async () => {
         chatId: DREAM_CHAT_ID,
         apply: true,
         botId: "100000000",
+        modelConfigPath: "/tmp/unused.json",
         modelTotalTimeoutMs: 300_000,
         modelCandidateTimeoutMs: 60_000,
         memoryMaxChars: 2_000,
         now: dreamNow,
       },
-      dreamFakeTextRunner({ text: "ok", toolCalls: 0, finishReason: "stop" }),
+      dreamFakeRouter({ text: "ok", toolCalls: 0, finishReason: "stop" }),
     );
     assert.equal(result.status, "success");
   } finally {
@@ -289,13 +352,6 @@ test("runDreamPass without logger stays silent", async () => {
 // Real runDigestCli(..., deps) wiring — the injected logger receiving
 // bot.dream.day_started/day_completed through an actual Dream pass on a
 // migrated database — is covered in tests/digest-cli-dream.test.ts.
-
-function routedError(reason: string, cause: Error): Error {
-  return Object.assign(new Error("Dream run failed.", { cause }), {
-    code: "candidates_exhausted",
-    attempts: [{ decision: { reason } }],
-  });
-}
 
 test("createLogger serializes Dream errorCode as a direct machine string", () => {
   const lines: string[] = [];

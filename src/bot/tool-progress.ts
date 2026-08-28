@@ -1,15 +1,3 @@
-import { renderProgressText } from "./tool-progress-render.js";
-import {
-  defaultPresentationScheduler,
-  runPresentationWithinDeadline,
-  waitForSchedulerDelay,
-  type PresentationDeadlineOutcome,
-  type PresentationScheduler,
-} from "./presentation-deadline.js";
-
-export { renderProgressText } from "./tool-progress-render.js";
-export type { PresentationScheduler as ToolProgressScheduler } from "./presentation-deadline.js";
-
 /**
  * Bounded, persisted Telegram tool-progress message.
  *
@@ -22,12 +10,8 @@ export type { PresentationScheduler as ToolProgressScheduler } from "./presentat
 export interface ToolProgressEvent {
   readonly toolName: string;
   readonly callId: string;
-  /** Stable host-owned identity used to select the safe input projection. */
-  readonly toolId?: string;
   /** Raw model input is projected through an allowlist before presentation. */
   readonly input?: Readonly<Record<string, unknown>>;
-  /** Number of provider-side operations represented by this event. */
-  readonly batchSize?: number;
 }
 
 /**
@@ -65,18 +49,8 @@ export interface ToolProgressBotApiPort {
     chatId: string,
     messageId: number,
     signal: AbortSignal,
-  ): Promise<ToolProgressDeleteResult>;
+  ): Promise<{ ok: true } | { ok: false }>;
 }
-
-/**
- * A terminal delete rejection is definitive for this presentation bubble: it
- * may remain visible in Telegram, but retrying cannot remove it.  Callers may
- * therefore retire the durable fence without confusing it with a transport or
- * rate-limit failure, which must remain retryable.
- */
-export type ToolProgressDeleteResult =
-  | { ok: true }
-  | { ok: false; terminal?: true };
 
 export interface ToolProgressStore {
   saveBotTurnProgress(
@@ -87,8 +61,6 @@ export interface ToolProgressStore {
   ): boolean;
   clearBotTurnProgress(turnId: number, nowMs?: number): boolean;
 }
-
-type ToolProgressScheduler = PresentationScheduler;
 
 export type ToolProgressState =
   | "none"
@@ -105,36 +77,19 @@ export interface ToolProgressPublisherOptions {
   store: ToolProgressStore;
   initialMessageId?: number;
   maxTextLength?: number;
-  /** Kept deliberately short: it is presentation polish, not a second timeout. */
-  minVisibleMs?: number;
-  /** Hard deadline for one best-effort Telegram presentation operation. */
-  operationTimeoutMs?: number;
   now?: () => number;
-  scheduler?: ToolProgressScheduler;
 }
 
-export interface ToolCallStatus {
+interface ToolCallStatus {
   readonly kind: "thinking" | "tool";
   readonly toolName: string;
-  readonly toolId?: string;
   readonly state: "running" | "ok" | "error";
   readonly inputPreview?: string;
-  readonly batchSize?: number;
 }
 
 const DEFAULT_MAX_TEXT_LENGTH = 3_500;
-export const DEFAULT_PROGRESS_MIN_VISIBLE_MS = 1_000;
-/** Presentation transport is never allowed to consume the durable final budget. */
-export const DEFAULT_PROGRESS_OPERATION_TIMEOUT_MS = 5_000;
-const MAX_PROGRESS_MIN_VISIBLE_MS = 1_200;
-/**
- * Hard presentation budget per turn. A normal eight-function Responses turn
- * fits (initial thinking + eight tool starts), while pathological hosted event
- * streams cannot consume Telegram's whole per-chat allowance before the final.
- */
-export const MAX_PROGRESS_SNAPSHOTS_PER_TURN = 10;
-/** A sent but unfenced UI bubble gets one short independent cleanup attempt. */
-const UNFENCED_PROGRESS_CLEANUP_TIMEOUT_MS = 5_000;
+const MAX_QUERY_PREVIEW_LINES = 3;
+const MAX_QUERY_PREVIEW_LINE_CHARS = 96;
 
 /**
  * Publishes a single Telegram progress message during model steps and read-tool
@@ -152,31 +107,12 @@ export class ToolProgressPublisher implements ToolProgressPort {
   readonly #botApi: ToolProgressBotApiPort;
   readonly #store: ToolProgressStore;
   readonly #maxTextLength: number;
-  readonly #minVisibleMs: number;
-  readonly #operationTimeoutMs: number;
   readonly #now: () => number;
-  readonly #scheduler: ToolProgressScheduler;
   #messageId: number | undefined;
   #state: ToolProgressState = "none";
   #pending = new Map<string, ToolCallStatus>();
   #dispatchPromise: Promise<void> = Promise.resolve();
-  #dispatchInFlight = false;
-  #finishPromise: Promise<void> | undefined;
   #lastRenderedText: string | undefined;
-  #visibleAtMs: number | undefined;
-  /**
-   * A message ACK can race the durable lease fence. Do not edit it again, but
-   * retain its id in-process for a second best-effort deletion at terminal.
-   */
-  #unfencedMessageId: number | undefined;
-  /**
-   * A rejected send can be an ambiguous post-accept network outcome. Without
-   * its Telegram id we cannot safely compensate, so never send another bubble
-   * in this turn and risk a duplicate visible tool status.
-   */
-  #sendOutcomeUnknown = false;
-  #finished = false;
-  #dispatchedSnapshots = 0;
 
   constructor(options: ToolProgressPublisherOptions) {
     this.#turnId = options.turnId;
@@ -187,14 +123,7 @@ export class ToolProgressPublisher implements ToolProgressPort {
     this.#store = options.store;
     this.#messageId = options.initialMessageId;
     this.#maxTextLength = options.maxTextLength ?? DEFAULT_MAX_TEXT_LENGTH;
-    this.#minVisibleMs = positiveDuration(
-      options.minVisibleMs ?? DEFAULT_PROGRESS_MIN_VISIBLE_MS,
-    );
-    this.#operationTimeoutMs = positiveOperationTimeout(
-      options.operationTimeoutMs ?? DEFAULT_PROGRESS_OPERATION_TIMEOUT_MS,
-    );
     this.#now = options.now ?? (() => Date.now());
-    this.#scheduler = options.scheduler ?? defaultPresentationScheduler;
   }
 
   get messageId(): number | undefined {
@@ -211,35 +140,15 @@ export class ToolProgressPublisher implements ToolProgressPort {
    */
   async recoverPrevious(signal: AbortSignal): Promise<void> {
     if (this.#messageId !== undefined) {
-      try {
-        const outcome = await this.#callPresentation(
-          (operationSignal) => this.#botApi.deleteMessage(
-            this.#chatId,
-            this.#messageId!,
-            operationSignal,
-          ),
-          signal,
-        );
-        if (outcome.kind === "completed" && outcome.value.ok) {
-          this.#messageId = undefined;
-          this.#state = "none";
-          this.#lastRenderedText = undefined;
-          this.#visibleAtMs = undefined;
-          this.#store.clearBotTurnProgress(this.#turnId, this.#now());
-          return;
-        }
-      } catch {
-        // A stale presentation bubble is never an agent or delivery failure.
-      }
-      // Keep the message ID durable: a later claimed attempt can retry the
-      // cleanup instead of orphaning a presentation bubble in Telegram.
-      this.#state = "unknown";
-      this.#persist();
+      await this.#botApi.deleteMessage(this.#chatId, this.#messageId, signal);
+      this.#messageId = undefined;
+      this.#state = "none";
+      this.#lastRenderedText = undefined;
+      this.#store.clearBotTurnProgress(this.#turnId, this.#now());
     }
   }
 
   onThinkingStarted(event: ThinkingProgressEvent): void {
-    if (this.#finished) return;
     this.#pending.set(event.callId, {
       kind: "thinking",
       toolName: "thinking",
@@ -249,7 +158,6 @@ export class ToolProgressPublisher implements ToolProgressPort {
   }
 
   onThinkingCompleted(event: ThinkingProgressEvent, ok: boolean): void {
-    if (this.#finished) return;
     const previous = this.#pending.get(event.callId);
     if (!previous) {
       return;
@@ -258,64 +166,29 @@ export class ToolProgressPublisher implements ToolProgressPort {
       ...previous,
       state: ok ? "ok" : "error",
     });
-    // A successful transition is folded into the next tool-start snapshot.
-    // Sending a standalone completion edit doubles Bot API traffic without
-    // adding durable information; failures remain immediately visible.
-    if (!ok) {
-      this.#dispatch();
-    }
+    this.#dispatch();
   }
 
   onToolStarted(event: ToolProgressEvent): void {
-    if (this.#finished) return;
-    // Replace the initial thinking line with the first concrete tool instead
-    // of retaining a permanently completed presentation-only marker.
-    for (const [callId, status] of this.#pending) {
-      if (status.kind === "thinking" && status.state === "ok") {
-        this.#pending.delete(callId);
-      }
-    }
-    const batchSize = normalizedBatchSize(event.batchSize);
     this.#pending.set(event.callId, {
       kind: "tool",
       toolName: event.toolName,
-      ...(event.toolId === undefined ? {} : { toolId: event.toolId }),
-      ...(batchSize === undefined
-        ? {}
-        : { batchSize }),
       state: "running",
-      inputPreview: toolInputPreview(event.toolId ?? event.toolName, event.input),
+      inputPreview: toolInputPreview(event.toolName, event.input),
     });
     this.#dispatch();
   }
 
   onToolCompleted(event: ToolProgressEvent, ok: boolean): void {
-    if (this.#finished) return;
     const previous = this.#pending.get(event.callId);
-    const batchSize = normalizedBatchSize(event.batchSize) ?? previous?.batchSize;
     this.#pending.set(event.callId, {
       kind: previous?.kind ?? "tool",
       toolName: event.toolName,
-      ...(previous?.toolId === undefined && event.toolId === undefined
-        ? {}
-        : { toolId: event.toolId ?? previous?.toolId }),
-      ...(batchSize === undefined
-        ? {}
-        : { batchSize }),
       state: ok ? "ok" : "error",
       inputPreview:
-        previous?.inputPreview ?? toolInputPreview(
-          event.toolId ?? previous?.toolId ?? event.toolName,
-          event.input,
-        ),
+        previous?.inputPreview ?? toolInputPreview(event.toolName, event.input),
     });
-    // Successful completion is visible in the next tool-start snapshot. This
-    // bounds a five-tool turn to one send plus five edits, leaving Telegram
-    // capacity for deletion and the actual final reply. Errors are exceptional
-    // and must still be rendered immediately.
-    if (!ok) {
-      this.#dispatch();
-    }
+    this.#dispatch();
   }
 
   /**
@@ -324,140 +197,35 @@ export class ToolProgressPublisher implements ToolProgressPort {
    * for any in-flight edit.
    */
   async finish(signal: AbortSignal): Promise<void> {
-    if (this.#finishPromise !== undefined) {
-      return this.#finishPromise;
-    }
-    // Freeze before awaiting queued I/O: late model/tool callbacks must never
-    // schedule a new Telegram message after this terminal cleanup begins.
-    this.#finished = true;
-    this.#finishPromise = this.#finish(signal);
-    return this.#finishPromise;
-  }
-
-  async #finish(signal: AbortSignal): Promise<void> {
     await this.#dispatchPromise;
-    if (this.#unfencedMessageId !== undefined) {
-      await this.#compensateUnfencedMessage(this.#unfencedMessageId);
-    }
     if (this.#messageId !== undefined) {
-      await this.#waitForMinimumVisibility(signal);
-      let deleted = false;
-      let terminalFailure = false;
-      try {
-        const outcome = await this.#callPresentation(
-          (operationSignal) => this.#botApi.deleteMessage(
-            this.#chatId,
-            this.#messageId!,
-            operationSignal,
-          ),
-          signal,
-        );
-        if (outcome.kind === "completed") {
-          deleted = outcome.value.ok;
-          terminalFailure = !outcome.value.ok && outcome.value.terminal === true;
-        }
-      } catch {
-        // Keep the exact durable message-id fence below. The final reply must
-        // still be deliverable even if deleting presentation text fails.
-      }
-      if (!deleted && !terminalFailure) {
-        // Do not clear this fence on an ambiguous delete. The durable turn's
-        // next attempt can recover this exact message instead.
-        this.#state = "unknown";
-        this.#persist();
-        return;
-      }
+      await this.#botApi.deleteMessage(this.#chatId, this.#messageId, signal);
       this.#messageId = undefined;
     }
-    if (this.#sendOutcomeUnknown) {
-      this.#state = "unknown";
-      this.#persist();
-      return;
-    }
     this.#state = "none";
-    this.#visibleAtMs = undefined;
     this.#store.clearBotTurnProgress(this.#turnId, this.#now());
   }
 
   #dispatch(): void {
-    if (this.#dispatchedSnapshots >= MAX_PROGRESS_SNAPSHOTS_PER_TURN) {
-      return;
-    }
-    this.#dispatchedSnapshots += 1;
-    // Snapshot at the event boundary. Otherwise a fast completion can mutate
-    // `#pending` before the first queued render and collapse send+edit into a
-    // single invisible message just before terminal deletion.
-    const text = renderProgressText(this.#pending, this.#maxTextLength);
-    // Every Bot API operation below catches its own rejection, so this serial
-    // promise never becomes a rejected/unhandled presentation failure.
-    // Start an idle first render immediately. Besides making the first status
-    // responsive, this preserves the event-boundary snapshot semantics while
-    // the deadline wrapper races its transport promise.
-    this.#dispatchPromise = this.#dispatchInFlight
-      ? this.#dispatchPromise.then(() => this.#renderAndSend(text))
-      : this.#renderAndSend(text);
-    this.#dispatchInFlight = true;
-    const tail = this.#dispatchPromise;
-    void tail.then(() => {
-      if (this.#dispatchPromise === tail) {
-        this.#dispatchInFlight = false;
-      }
-    });
+    this.#dispatchPromise = this.#dispatchPromise.then(() =>
+      this.#renderAndSend(),
+    );
   }
 
-  async #renderAndSend(text: string): Promise<void> {
-    // Do not create a second bubble while a prior post-ACK fence failure is
-    // still being compensated. That would trade one recoverable UI artifact
-    // for an unbounded sequence of them.
-    if (this.#unfencedMessageId !== undefined || this.#sendOutcomeUnknown) {
-      return;
-    }
+  async #renderAndSend(): Promise<void> {
+    const text = renderProgressText(this.#pending, this.#maxTextLength);
     if (this.#messageId === undefined) {
       this.#state = "dispatching";
-      // Never create a UI message if this worker can no longer establish the
-      // pre-send durable fence. A later owner may safely try again.
-      if (!this.#persist()) {
-        this.#state = "unknown";
-        return;
-      }
-      let result: { ok: true; messageId: number } | { ok: false };
-      const outcome = await this.#callPresentation(
-        (operationSignal) => this.#botApi.sendMessage(
-          this.#chatId,
-          text,
-          operationSignal,
-        ),
+      this.#persist();
+      const result = await this.#botApi.sendMessage(
+        this.#chatId,
+        text,
         this.#signal,
-        (lateResult) => {
-          if (lateResult.ok) {
-            void this.#compensateUnfencedMessage(lateResult.messageId);
-          }
-        },
       );
-      if (outcome.kind !== "completed") {
-        this.#sendOutcomeUnknown = true;
-        this.#state = "unknown";
-        this.#persist();
-        return;
-      }
-      result = outcome.value;
       if (result.ok) {
         this.#messageId = result.messageId;
         this.#state = "active";
         this.#lastRenderedText = text;
-        this.#visibleAtMs = this.#now();
-        // The ACK is not enough: if the post-send fence was refused or the
-        // store threw, do not leave a message that no future worker can find.
-        if (!this.#persist()) {
-          const messageId = this.#messageId;
-          this.#messageId = undefined;
-          this.#lastRenderedText = undefined;
-          this.#visibleAtMs = undefined;
-          this.#state = "unknown";
-          await this.#compensateUnfencedMessage(messageId);
-          return;
-        }
-        return;
       } else {
         this.#state = "unknown";
       }
@@ -466,130 +234,54 @@ export class ToolProgressPublisher implements ToolProgressPort {
         return;
       }
       this.#state = "active";
-      let result: { ok: true } | { ok: false };
-      const outcome = await this.#callPresentation(
-        (operationSignal) => this.#botApi.editMessageText(
-          this.#chatId,
-          this.#messageId!,
-          text,
-          operationSignal,
-        ),
+      const result = await this.#botApi.editMessageText(
+        this.#chatId,
+        this.#messageId,
+        text,
         this.#signal,
       );
-      if (outcome.kind !== "completed") {
-        this.#state = "unknown";
-        this.#persist();
-        return;
-      }
-      result = outcome.value;
       if (result.ok) {
         this.#lastRenderedText = text;
-        // A late tool-start/completion edit must remain observable too; the
-        // initial thinking bubble may already have been visible for minutes.
-        this.#visibleAtMs = this.#now();
       }
     }
     this.#persist();
   }
 
-  /**
-   * Progress is presentation-only. The SQLite fence is mandatory after an ACK
-   * but a refusal/exception must not reject the model turn or strand its UI.
-   */
-  #persist(): boolean {
-    try {
-      return this.#store.saveBotTurnProgress(
-        this.#turnId,
-        this.#workerId,
-        {
-          messageId: this.#messageId,
-          state: this.#state,
-        },
-        this.#now(),
+  #persist(): void {
+    this.#store.saveBotTurnProgress(
+      this.#turnId,
+      this.#workerId,
+      {
+        messageId: this.#messageId,
+        state: this.#state,
+      },
+      this.#now(),
+    );
+  }
+}
+
+export function renderProgressText(
+  pending: ReadonlyMap<string, ToolCallStatus>,
+  maxLength: number,
+): string {
+  const lines: string[] = [];
+  for (const [, status] of pending) {
+    const icon =
+      status.kind === "thinking" && status.state === "running"
+        ? "🧠"
+        : status.state === "running" ? "⏳" : status.state === "ok" ? "✓" : "✗";
+    lines.push(`${icon} ${status.toolName}`);
+    if (status.inputPreview) {
+      lines.push(
+        ...status.inputPreview.split("\n").map((line) => `  ${line}`),
       );
-    } catch {
-      return false;
     }
   }
-
-  /**
-   * A progress bubble created by this process has a stable Telegram id, so it
-   * remains safe to delete even after its durable turn lease was fenced away.
-   * This signal deliberately does not inherit the lost worker signal: a lease
-   * abort must not itself turn the compensating cleanup into a no-op.
-   */
-  async #compensateUnfencedMessage(messageId: number): Promise<void> {
-    this.#unfencedMessageId = messageId;
-    try {
-      const outcome = await this.#callPresentation(
-        (operationSignal) => this.#botApi.deleteMessage(
-          this.#chatId,
-          messageId,
-          operationSignal,
-        ),
-        new AbortController().signal,
-        undefined,
-        UNFENCED_PROGRESS_CLEANUP_TIMEOUT_MS,
-      );
-      if (outcome.kind === "completed" && outcome.value.ok) {
-        this.#unfencedMessageId = undefined;
-      }
-    } catch {
-      // The id remains in-memory for one terminal retry. A process crash here
-      // is an unavoidable ambiguous Bot API outcome, not a lease violation.
-    }
+  const text = lines.join("\n");
+  if (text.length <= maxLength) {
+    return text;
   }
-
-  async #waitForMinimumVisibility(signal: AbortSignal): Promise<void> {
-    if (this.#visibleAtMs === undefined || signal.aborted) {
-      return;
-    }
-    const remainingMs = this.#minVisibleMs - (this.#now() - this.#visibleAtMs);
-    if (remainingMs <= 0) {
-      return;
-    }
-    await waitForSchedulerDelay(this.#scheduler, remainingMs, signal);
-  }
-
-  /**
-   * Telegram adapters are expected to honour AbortSignal, but the boundary is
-   * deliberately raced too: a broken adapter must not hold the worker's
-   * durable final publication forever.  A late successful send is compensated
-   * because it may have reached Telegram after the deadline.
-   */
-  async #callPresentation<T>(
-    operation: (signal: AbortSignal) => Promise<T>,
-    parentSignal: AbortSignal,
-    onLateSuccess?: (value: T) => void,
-    timeoutMs = this.#operationTimeoutMs,
-  ): Promise<PresentationDeadlineOutcome<T>> {
-    return runPresentationWithinDeadline({
-      operation,
-      parentSignal,
-      onLateSuccess,
-      timeoutMs,
-      scheduler: this.#scheduler,
-    });
-  }
-}
-
-function positiveDuration(value: number): number {
-  if (!Number.isFinite(value) || value < 0) {
-    throw new Error("Tool progress minimum visible duration must be non-negative.");
-  }
-  return Math.min(Math.floor(value), MAX_PROGRESS_MIN_VISIBLE_MS);
-}
-
-function positiveOperationTimeout(value: number): number {
-  if (!Number.isFinite(value) || value < 1) {
-    throw new Error("Tool progress operation timeout must be at least one millisecond.");
-  }
-  return Math.min(Math.floor(value), UNFENCED_PROGRESS_CLEANUP_TIMEOUT_MS);
-}
-
-function normalizedBatchSize(value: number | undefined): number | undefined {
-  if (value === undefined || !Number.isSafeInteger(value) || value < 1) return undefined;
-  return Math.min(value, 99);
+  return text.slice(0, Math.max(1, maxLength - 1)) + "…";
 }
 
 /**
@@ -603,75 +295,127 @@ function toolInputPreview(
   if (!input) {
     return undefined;
   }
-  const query = textField(input, "query");
-  if (toolName === "rag_bm25_search" && query) {
-    return queryPreviewText(query);
+  // The request itself can contain a private person's name or other sensitive
+  // clue. Unlike a public web query, never echo it into the chat timeline.
+  if (toolName === "research_lookup") {
+    return "корпус: обезличенные HH-исследования";
   }
-  if (toolName === "keyword_search" && query) {
-    return queryPreviewText(query);
+  if (toolName === "audio_transcribe") {
+    // The media selector is application-owned. Show its tiny safe projection,
+    // never an attachment name, file id, path, URL, or transcript.
+    return input.source === "reply"
+      ? "аудио: прямой реплай"
+      : "аудио: текущее сообщение";
+  }
+  const query = textField(input, "query");
+  if (query) {
+    if (toolName === "rag_bm25_search") {
+      return `rag: ${queryPreviewText(query)}`;
+    }
+    return queryPreview(query);
+  }
+  if (toolName === "static_page_fetch" || toolName === "firecrawl_crawl") {
+    const url = textField(input, "url");
+    if (url) {
+      return urlPreview(url);
+    }
+  }
+  if (toolName === "inspect_web_images") {
+    // Count only: image URLs never appear in visible progress.
+    const urls = Array.isArray(input.urls)
+      ? input.urls.filter((u): u is string => typeof u === "string")
+      : [];
+    if (urls.length > 0) {
+      return `картинки: ${Math.min(urls.length, 6)}`;
+    }
+  }
+  if (
+    toolName === "remember_fast" ||
+    toolName === "remember_lesson" ||
+    toolName === "save_chat_skill" ||
+    toolName === "load_chat_skill"
+  ) {
+    const title = textField(input, "title") ?? textField(input, "name");
+    if (title) {
+      return `запись: ${queryPreviewText(title)}`;
+    }
   }
   if (toolName === "day_digest") {
     const dayFrom = textField(input, "day_from");
     const dayTo = textField(input, "day_to");
     if (dayFrom) {
-      return `${dayFrom}${dayTo ? `..${dayTo}` : ""}`;
+      return `период: ${dayFrom}${dayTo ? ` — ${dayTo}` : ""}`;
     }
   }
   if (toolName === "read_chat_slice") {
     if (textField(input, "cursor")) {
-      return "next";
+      return "срез: продолжение по курсору";
     }
     if (input.mode === "recent") {
       const count = integerField(input, "count");
       if (count !== undefined) {
-        return String(count);
+        return `срез: последние ${count}`;
       }
-      return "recent";
+      return "срез: последние сообщения";
     }
     if (input.mode === "period") {
       const dayFrom = textField(input, "day_from");
       const dayTo = textField(input, "day_to");
       if (dayFrom) {
-        return `${dayFrom}${dayTo ? `..${dayTo}` : ""}`;
+        return `срез: ${dayFrom}${dayTo ? ` — ${dayTo}` : ""}`;
       }
-      return "period";
+      return "срез: период";
     }
   }
   if (toolName === "thread_context") {
     const messageId = integerField(input, "message_id");
     if (messageId !== undefined) {
-      return `#${messageId}`;
+      return `сообщение: #${messageId}`;
     }
-  }
-  if (toolName === "load_chat_skill") {
-    const name = textField(input, "name");
-    if (name) {
-      return queryPreviewText(name);
-    }
-  }
-  if (toolName === "hosted_web") {
-    if (query) return queryPreviewText(query);
-    const pattern = textField(input, "pattern");
-    if (pattern) return queryPreviewText(pattern);
-    const url = textField(input, "url");
-    if (url) return compactUrl(url);
   }
   return undefined;
 }
 
-function queryPreviewText(query: string): string {
-  const normalized = query.replace(/\s+/gu, " ").trim();
-  return normalized;
+function queryPreview(query: string): string {
+  return `запрос: ${queryPreviewText(query)}`;
 }
 
-function compactUrl(value: string): string {
+function urlPreview(value: string): string {
   try {
     const url = new URL(value);
-    const path = url.pathname === "/" ? "" : url.pathname;
-    return `${url.hostname}${path}`;
+    // Query strings often carry signed or user-specific values. The chat only
+    // needs to see which public page is being opened.
+    return `страница: ${queryPreviewText(`${url.protocol}//${url.host}${url.pathname}`)}`;
   } catch {
-    return queryPreviewText(value);
+    return `страница: ${queryPreviewText(value)}`;
   }
+}
+
+function queryPreviewText(query: string): string {
+  const normalized = query.replace(/\s+/gu, " ").trim();
+  if (normalized.length === 0) {
+    return "";
+  }
+  const characters = Array.from(normalized);
+  const capacity =
+    MAX_QUERY_PREVIEW_LINES * MAX_QUERY_PREVIEW_LINE_CHARS;
+  const truncated = characters.length > capacity;
+  const visible = truncated
+    ? characters.slice(0, capacity - 1)
+    : characters;
+  const rows: string[] = [];
+  for (let index = 0; index < visible.length; index += MAX_QUERY_PREVIEW_LINE_CHARS) {
+    rows.push(
+      visible.slice(index, index + MAX_QUERY_PREVIEW_LINE_CHARS).join(""),
+    );
+  }
+  if (truncated) {
+    const last = rows.length - 1;
+    rows[last] = `${rows[last] ?? ""}…`;
+  }
+  return rows
+    .map((row, index) => index === 0 ? row : `        ${row}`)
+    .join("\n");
 }
 
 function textField(

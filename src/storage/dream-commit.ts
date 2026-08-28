@@ -3,8 +3,6 @@ import {
   computeDreamAudit,
   type DreamAuditSnapshots,
 } from "./dream-audit-codec.js";
-import { renderDreamAuditPublication } from "./dream-publication-renderer.js";
-import type { EnqueueDreamPublicationInput } from "./dream-publications.js";
 import {
   MAX_FAST_TITLE_CHARS,
   MAX_LESSON_TITLE_CHARS,
@@ -78,9 +76,6 @@ export abstract class DreamCommitMethods extends StoreCore {
     nowMs: number;
   }) => void;
   declare protected dreamAuditExistsLocked: (chatId: string, day: string) => boolean;
-  declare protected enqueueDreamPublicationLocked: (
-    input: EnqueueDreamPublicationInput,
-  ) => unknown;
 
   commitDreamDay(input: CommitDreamDayInput): StoredDreamDay {
     if (input.day.status !== "completed") {
@@ -156,10 +151,6 @@ export abstract class DreamCommitMethods extends StoreCore {
         skills: new Set(deletedSkills),
       });
       this.insertDreamAuditLocked({ chatId, day, audit, nowMs });
-      const publication = renderDreamAuditPublication(audit, nowMs);
-      if (publication !== undefined) {
-        this.enqueueDreamPublicationLocked(publication);
-      }
 
       return dayResult;
     });

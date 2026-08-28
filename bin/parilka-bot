@@ -3,93 +3,17 @@ set -euo pipefail
 umask 077
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-configured_project_dir="${TELEGRAM_PROJECT_DIR:-$script_dir/..}"
-project_dir="$(cd -- "$configured_project_dir" && pwd -P)"
+project_dir="${TELEGRAM_PROJECT_DIR:-$(cd -- "$script_dir/.." && pwd)}"
 cd "$project_dir"
 
-parilka_resolve_entrypoint() {
-  local env_name="$1"
-  local requested="$2"
-  local default_path="$3"
-  local current_pointer="$4"
-  local expected_name="$5"
-  local releases_dir="$project_dir/.deploy/responses-releases"
-  local resolved_pointer relative_release expected_path resolved_path
+entrypoint="$project_dir/dist/bot-daemon.js"
+"$project_dir/bin/telegram-parilka-mcp-check-build" "$project_dir" "$entrypoint"
 
-  if [[ "$requested" == "$default_path" ]]; then
-    if [[ -L "$requested" || ( -e "$requested" && ! -f "$requested" ) ]]; then
-      echo "$env_name default entrypoint must be a regular non-symlink file" >&2
-      exit 78
-    fi
-    realpath -m -- "$requested"
-    return
-  fi
-  if [[ "$requested" != "$current_pointer/$expected_name" ]]; then
-    echo "$env_name must be the default build or the exact active Responses release entrypoint" >&2
-    exit 78
-  fi
-  if [[ ! -L "$current_pointer" ]]; then
-    echo "Responses current pointer must be a symbolic link" >&2
-    exit 78
-  fi
-  resolved_pointer="$(realpath -e -- "$current_pointer")" || {
-    echo "Responses current pointer must resolve to a release directory" >&2
-    exit 78
-  }
-  relative_release="${resolved_pointer#"$releases_dir"/}"
-  if [[ "$resolved_pointer" == "$releases_dir" || "$relative_release" == "$resolved_pointer" || "$relative_release" == */* || ! "$relative_release" =~ ^[0-9]+-[0-9]+-[0-9a-f]{12}$ ]]; then
-    echo "Responses current pointer must resolve to one versioned release" >&2
-    exit 78
-  fi
-  expected_path="$resolved_pointer/$expected_name"
-  resolved_path="$(realpath -e -- "$requested")" || {
-    echo "$env_name active Responses release entrypoint is missing" >&2
-    exit 78
-  }
-  if [[ "$resolved_path" != "$expected_path" || -L "$resolved_path" || ! -f "$resolved_path" ]]; then
-    echo "$env_name active Responses release entrypoint must be its exact regular file" >&2
-    exit 78
-  fi
-  if [[ -n "$(find -P "$resolved_pointer" -type l -print -quit)" ]]; then
-    echo "Responses release tree must not contain symbolic links" >&2
-    exit 78
-  fi
-  printf '%s\n' "$resolved_path"
-}
+# shellcheck source=bin/parilka-secret-env
+source "$project_dir/bin/parilka-secret-env"
+parilka_load_secret_file PARILKA_BOT_TOKEN PARILKA_BOT_TOKEN_FILE
+parilka_load_secret_file PARILKA_QWEN_API_KEY PARILKA_QWEN_API_KEY_FILE
+parilka_load_secret_file PARILKA_DEEPSEEK_API_KEY PARILKA_DEEPSEEK_API_KEY_FILE
 
-default_entrypoint="$project_dir/dist/bot-daemon.js"
-release_pointer="$project_dir/.deploy/responses-current"
-entrypoint="${PARILKA_BOT_ENTRYPOINT:-$default_entrypoint}"
-
-resolved_entrypoint="$(parilka_resolve_entrypoint \
-  "PARILKA_BOT_ENTRYPOINT" "$entrypoint" "$default_entrypoint" "$release_pointer" "bot-daemon.js")"
-
-# A private EnvironmentFile may still contain a stale worker-count override.
-# systemd gives EnvironmentFile= values precedence over Environment=, so make
-# the single durable-thread worker invariant explicit at the final exec seam.
-export PARILKA_BOT_WORKERS=1
-
-"$project_dir/bin/telegram-parilka-mcp-check-build" "$project_dir" "$resolved_entrypoint"
-
-# Standalone preflight proves the release artifact and direct Responses access
-# before cutover. It is intentionally not a Bot API owner and therefore must
-# not touch the lifetime lock held by the currently deployed poller.
-if (( $# == 1 )) && [[ "$1" == "--preflight" ]]; then
-  exec "${TELEGRAM_NODE:-node}" "$resolved_entrypoint" --preflight
-fi
-
-# `parilka-bot-lock.mjs` opens this pathname with O_NOFOLLOW, verifies the
-# descriptor and then passes it to flock --no-fork. Never remove this file:
-# its name is not a liveness signal.
-lock_file="${PARILKA_BOT_LOCK_FILE:?PARILKA_BOT_LOCK_FILE must be configured}"
-if [[ "$lock_file" != /* ]]; then
-  echo "PARILKA_BOT_LOCK_FILE must be an absolute path" >&2
-  exit 1
-fi
-if [[ ! -x /usr/bin/flock ]]; then
-  echo "flock is required for exclusive Parilka Bot API ownership" >&2
-  exit 1
-fi
-
-exec "${TELEGRAM_NODE:-node}" "$script_dir/parilka-bot-lock.mjs" \
-  "$project_dir" "$lock_file" "${TELEGRAM_NODE:-node}" "$resolved_entrypoint" "$@"
+node_bin="${TELEGRAM_NODE:-node}"
+exec "$node_bin" "$entrypoint" "$@"

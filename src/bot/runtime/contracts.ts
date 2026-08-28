@@ -3,7 +3,6 @@ import type { ChatInfo } from "../../telegram/types.js";
 import type { TelegramUpdateOptions } from "../telegram-update.js";
 import type { TurnCoordinator } from "../turn-coordinator.js";
 import type { JsonEventLogger } from "../worker.js";
-import type { TypingLeaseManager } from "../typing.js";
 
 export const MAX_BOT_WORKER_CONCURRENCY = 3;
 
@@ -31,8 +30,6 @@ export interface BotUpdateProcessorOptions {
   store: BotRuntimeStore;
   coordinator: TurnCoordinator;
   workNotifier: BotWorkNotifier;
-  /** Starts chat-level typing immediately after a durable turn reservation. */
-  typingLeases?: Pick<TypingLeaseManager, "enqueue">;
   telegram: TelegramUpdateOptions;
   triggerCooldownMs?: number;
   updateMaxAttempts?: number;

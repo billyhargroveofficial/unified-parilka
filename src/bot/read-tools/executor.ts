@@ -17,39 +17,95 @@ import {
   type BotReadToolDefinition,
   type BotReadToolName,
   type BotReadToolResult,
-  type BotReadToolSkillStore,
   type BotReadToolsOptions,
+  type PaperSearchProvider,
+  type ResearchGatewayProvider,
+  type WebFetchProvider,
+  type WebSearchProvider,
 } from "./contracts.js";
 import {
   failure,
   normalizeReadToolError,
-  success,
 } from "./payload.js";
+import {
+  executePaperSearch,
+  DEFAULT_PAPER_RATE_LIMIT_MS,
+  DEFAULT_PAPER_TIMEOUT_MS,
+} from "./paper-executor.js";
+import { executeResearchLookup } from "./research-executor.js";
 import {
   dayDigestArgsSchema,
   keywordSearchArgsSchema,
-  loadChatSkillArgsSchema,
+  paperSearchArgsSchema,
   ragBm25SearchArgsSchema,
   readChatSliceArgsSchema,
+  researchLookupArgsSchema,
   threadContextArgsSchema,
+  webFetchArgsSchema,
+  webSearchArgsSchema,
 } from "./schemas.js";
+import {
+  DEFAULT_WEB_FETCH_TIMEOUT_MS,
+  executeWebFetch,
+  PublicWebFetchProvider,
+} from "./web-fetch-executor.js";
+import { executeWebSearch } from "./web-executor.js";
 
 const DEFAULT_CHAT_SEARCH_TIMEOUT_MS = 15_000;
-const MAX_CHAT_SEARCH_TIMEOUT_MS = 5 * 60_000;
+const DEFAULT_WEB_TIMEOUT_MS = 60_000;
+const MAX_WEB_TIMEOUT_MS = 5 * 60_000;
+const DEFAULT_RESEARCH_GATEWAY_TIMEOUT_MS = 20_000;
 
 export class BotReadTools {
   readonly #cacheContext: CacheExecutorContext;
-  readonly #skillStore: BotReadToolSkillStore | undefined;
+  readonly #webSearch: WebSearchProvider | undefined;
+  readonly #webFetch: WebFetchProvider;
+  readonly #paperSearch: PaperSearchProvider | undefined;
+  readonly #researchGateway: ResearchGatewayProvider | undefined;
+  readonly #webSearchTimeoutMs: number;
+  readonly #webFetchTimeoutMs: number;
+  readonly #paperSearchTimeoutMs: number;
+  readonly #paperSearchRateLimitMs: number;
+  readonly #researchGatewayTimeoutMs: number;
 
   constructor(options: BotReadToolsOptions) {
     const chatId = requireNonEmpty(options.chatId, "chatId");
     const cache = options.cache;
+    this.#webSearch = options.webSearch;
+    this.#webFetch = options.webFetch ?? new PublicWebFetchProvider();
+    this.#paperSearch = options.paperSearch;
+    this.#researchGateway = options.researchGateway;
     const timeZone = options.timeZone ?? DEFAULT_TIME_ZONE;
     assertTimeZone(timeZone);
     const chatSearchTimeoutMs = boundedPositiveInteger(
       options.chatSearchTimeoutMs ?? DEFAULT_CHAT_SEARCH_TIMEOUT_MS,
-      MAX_CHAT_SEARCH_TIMEOUT_MS,
+      MAX_WEB_TIMEOUT_MS,
       "chatSearchTimeoutMs",
+    );
+    this.#webSearchTimeoutMs = boundedPositiveInteger(
+      options.webSearchTimeoutMs ?? DEFAULT_WEB_TIMEOUT_MS,
+      MAX_WEB_TIMEOUT_MS,
+      "webSearchTimeoutMs",
+    );
+    this.#webFetchTimeoutMs = boundedPositiveInteger(
+      options.webFetchTimeoutMs ?? DEFAULT_WEB_FETCH_TIMEOUT_MS,
+      MAX_WEB_TIMEOUT_MS,
+      "webFetchTimeoutMs",
+    );
+    this.#paperSearchTimeoutMs = boundedPositiveInteger(
+      options.paperSearchTimeoutMs ?? DEFAULT_PAPER_TIMEOUT_MS,
+      MAX_WEB_TIMEOUT_MS,
+      "paperSearchTimeoutMs",
+    );
+    this.#paperSearchRateLimitMs = boundedPositiveInteger(
+      options.paperSearchRateLimitMs ?? DEFAULT_PAPER_RATE_LIMIT_MS,
+      60_000,
+      "paperSearchRateLimitMs",
+    );
+    this.#researchGatewayTimeoutMs = boundedPositiveInteger(
+      options.researchGatewayTimeoutMs ?? DEFAULT_RESEARCH_GATEWAY_TIMEOUT_MS,
+      MAX_WEB_TIMEOUT_MS,
+      "researchGatewayTimeoutMs",
     );
     this.#cacheContext = {
       chatId,
@@ -58,7 +114,6 @@ export class BotReadTools {
       chatSearchTimeoutMs,
       botSenderId: options.botSenderId,
     };
-    this.#skillStore = options.skillStore;
   }
 
   listTools(): readonly BotReadToolDefinition[] {
@@ -111,67 +166,40 @@ export class BotReadTools {
             threadContextArgsSchema.parse(rawArgs ?? {}),
             options.sourceMessageId,
           );
-        case "load_chat_skill":
-          return executeLoadChatSkill(
-            this.#skillStore,
-            this.#cacheContext.chatId,
-            loadChatSkillArgsSchema.parse(rawArgs ?? {}),
-            options.sourceMessageId,
+        case "web_search":
+          return await executeWebSearch(
+            this.#webSearch,
+            webSearchArgsSchema.parse(rawArgs ?? {}),
+            this.#webSearchTimeoutMs,
+            options.signal,
+          );
+        case "static_page_fetch":
+          return await executeWebFetch(
+            this.#webFetch,
+            webFetchArgsSchema.parse(rawArgs ?? {}),
+            this.#webFetchTimeoutMs,
+            options.signal,
+          );
+        case "paper_search":
+          return await executePaperSearch(
+            this.#paperSearch,
+            paperSearchArgsSchema.parse(rawArgs ?? {}),
+            this.#paperSearchTimeoutMs,
+            this.#paperSearchRateLimitMs,
+            options.signal,
+          );
+        case "research_lookup":
+          return await executeResearchLookup(
+            this.#researchGateway,
+            researchLookupArgsSchema.parse(rawArgs ?? {}),
+            this.#researchGatewayTimeoutMs,
+            options.signal,
           );
       }
     } catch (error) {
       return failure(name, normalizeReadToolError(error));
     }
   }
-}
-
-function executeLoadChatSkill(
-  skillStore: BotReadToolSkillStore | undefined,
-  chatId: string,
-  args: { name: string },
-  sourceMessageId: number | undefined,
-): BotReadToolResult {
-  if (skillStore === undefined) {
-    return failure("load_chat_skill", {
-      code: "cache_error",
-      retryable: false,
-      message: "Chat skill storage is unavailable.",
-    });
-  }
-  // A skill is derived by a background pass. Without a host-owned trigger
-  // boundary, even a same-chat row may have been created after this turn.
-  if (!isPositiveSafeInteger(sourceMessageId)) {
-    return success("load_chat_skill", "empty", { name: args.name, found: false }, []);
-  }
-  const skill = skillStore.getChatSkill({ chatId, name: args.name });
-  if (skill === undefined) {
-    return success("load_chat_skill", "empty", { name: args.name, found: false }, []);
-  }
-  if (!isVisibleCausalSkill(skill, chatId, sourceMessageId)) {
-    return success("load_chat_skill", "empty", { name: args.name, found: false }, []);
-  }
-  return success("load_chat_skill", "done", {
-    name: skill.name,
-    description: skill.description,
-    instructions: skill.instructions,
-  }, []);
-}
-
-function isVisibleCausalSkill(
-  value: { chatId: string; name: string; description: string; instructions: string; sourceMessageId?: number },
-  chatId: string,
-  triggerMessageId: number,
-): boolean {
-  return value.chatId === chatId &&
-    typeof value.name === "string" && value.name.trim() !== "" &&
-    typeof value.description === "string" && value.description.trim() !== "" &&
-    typeof value.instructions === "string" && value.instructions.trim() !== "" &&
-    isPositiveSafeInteger(value.sourceMessageId) &&
-    value.sourceMessageId < triggerMessageId;
-}
-
-function isPositiveSafeInteger(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 }
 
 function isBotReadToolName(value: string): value is BotReadToolName {
