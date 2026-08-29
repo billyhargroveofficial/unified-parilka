@@ -116,6 +116,9 @@ export function redactedConfig(
     hermesProjection: config.hermesProjection ?? {
       enabled: false,
     },
+    openclawProjection: config.openclawProjection ?? {
+      enabled: false,
+    },
   };
 }
 

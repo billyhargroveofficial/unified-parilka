@@ -1,7 +1,11 @@
-# Hermes profile «Парилка228»
+# Hermes profile «Парилка228» (rollback only)
 
-Profile assets live in `integrations/hermes/parilka-profile/`. They serve one
-Telegram group (`-1003179772905`) through the `parilka-chat` trusted plugin
+Штатный poller — OpenClaw, см. [OPENCLAW.md](OPENCLAW.md). Этот профиль и
+`hermes-gateway-parilka.service` не стартуют сами: unit masked, `parilka-maintain`
+больше не Wants `parilka-hermes-project`.
+
+Profile assets live in `integrations/hermes/parilka-profile/`. They served one
+Telegram group (`-1003179772905`) through the Hermes `parilka-chat` trusted plugin
 and loopback MCP at `127.0.0.1:8766/mcp`.
 
 ## Runtime contract

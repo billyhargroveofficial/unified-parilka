@@ -7,20 +7,24 @@ group chat. Application shells только компонуют independently tes
 ## Runtime topology
 
 ```text
-Bot API ──► parilka-bot ───────────────┐
-                                       ├──► SQLite WAL v21 ◄── maintenance/digests
-MTProto ──► parilka-sync ──────────────┘
+Bot API ──► OpenClaw agent parilka ─┐
+            (host gateway account)   │
+                                     ├──► SQLite WAL ◄── maintenance/digests
+MTProto ──► parilka-sync ────────────┘
                  │
                  └──► HTTP 127.0.0.1:8766/mcp
                                   ▲
-MCP harness ──stdio──► thin proxy─┘
+                 plugin parilka-chat (trusted bridge)
 ```
 
 - `parilka-sync` — единственный штатный MTProto owner, history sync owner и
   loopback MCP owner.
-- `parilka-bot` — единственный Bot API long poller для данного token; model
-  work выполняется durable workers после committed ingest.
-- Оба процесса используют один canonical SQLite file, но не общий process.
+- Telegram group agent — OpenClaw account/agent `parilka` на существующем
+  host gateway. Один Bot API token — один poller. Plugin `parilka-chat`
+  вызывает loopback MCP и прячет `source_message_id` от модели.
+- `parilka-bot` и `hermes-gateway-parilka` не являются штатным poller.
+  Hermes-код в репозитории — только rollback; live unit masked.
+- `parilka-sync` и OpenClaw не делят process. SQLite принадлежит Parilka.
 - Общий Telegram MCP rulesync service на `127.0.0.1:8765` — отдельная система
   машины и не является частью Parilka.
 
@@ -37,7 +41,8 @@ MCP harness ──stdio──► thin proxy─┘
 | Providers | `src/providers/` | validated roles/candidates, hardened HTTP, fallback classification |
 | Vector | `src/vector/`, `src/embeddings.ts` | opt-in index, atomic source recheck, dense + learned sparse search/fusion, bounded ColBERT rerank; backend `external_openai` (legacy) или операторский loopback BGE-M3 (`services/bge-m3`) |
 | Maintenance | `src/maintenance/`, `src/maintenance-cli.ts` | bounded retention, deferred FTS, WAL checkpoint, schema integrity; `parilka-maintain` |
-| Operational CLI | `src/{python-import,digest-cli}/` | offline migration, digest and dream command implementations compiled into `dist` |
+| OpenClaw bridge | `integrations/openclaw/`, `src/openclaw-projection/` | trusted plugin, agent workspace templates, Dream/skills projection into the OpenClaw workspace |
+| Operational CLI | `src/{python-import,digest-cli,openclaw-projection}/` | offline migration, digest and dream command implementations compiled into `dist` |
 | Operations | `operations/`, `systemd/`, `bin/` | human-reviewed install, migration, retention и rollback procedures |
 | Long-lived handoff | `loop-develop/` | один active goal; closed/retired evidence в history |
 

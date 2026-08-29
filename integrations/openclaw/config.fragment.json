@@ -1,0 +1,120 @@
+{
+  "_comment": "Additive OpenClaw fragment for agent parilka. No secrets. Merge into ~/.openclaw/openclaw.json; token is env OPENCLAW_TELEGRAM_BOT_TOKEN_PARILKA.",
+  "agents": {
+    "entries": {
+      "parilka": {
+        "name": "Парилка228",
+        "workspace": "~/.openclaw/workspace-parilka",
+        "model": "openai/gpt-5.6-luna",
+        "thinkingDefault": "xhigh",
+        "groupChat": {
+          "mentionPatterns": [
+            "@bichiycepenstotri_bot"
+          ]
+        },
+        "tools": {
+          "deny": [
+            "group:runtime",
+            "group:fs",
+            "group:ui",
+            "group:automation",
+            "group:nodes",
+            "group:agents",
+            "group:sessions",
+            "bundle-mcp",
+            "telegram__*",
+            "telegram-wife__*",
+            "exec",
+            "process",
+            "code_execution",
+            "browser",
+            "apply_patch",
+            "write",
+            "edit",
+            "message",
+            "nodes",
+            "computer",
+            "canvas",
+            "camera",
+            "contacts",
+            "calendar"
+          ],
+          "elevated": {
+            "enabled": false
+          }
+        },
+        "skills": [
+          "parilka-lessons",
+          "parilka-skill-157b396305bc3852",
+          "parilka-skill-37cd3b6b8daf52dc",
+          "parilka-skill-5d8b08992e7f1001"
+        ],
+        "verboseDefault": "full",
+        "toolProgressDetail": "explain",
+        "reasoningDefault": "stream"
+      }
+    }
+  },
+  "bindings": [
+    {
+      "agentId": "parilka",
+      "match": {
+        "channel": "telegram",
+        "accountId": "parilka"
+      }
+    }
+  ],
+  "channels": {
+    "telegram": {
+      "accounts": {
+        "parilka": {
+          "enabled": true,
+          "name": "Парилка228",
+          "botToken": {
+            "source": "env",
+            "provider": "default",
+            "id": "OPENCLAW_TELEGRAM_BOT_TOKEN_PARILKA"
+          },
+          "dmPolicy": "disabled",
+          "groupPolicy": "allowlist",
+          "groupAllowFrom": [
+            "*"
+          ],
+          "configWrites": false,
+          "replyToMode": "off",
+          "richMessages": true,
+          "groups": {
+            "-1003179772905": {
+              "requireMention": true
+            }
+          },
+          "streaming": {
+            "mode": "progress",
+            "preview": {
+              "toolProgress": true,
+              "commandText": "status"
+            },
+            "progress": {
+              "toolProgress": true,
+              "commandText": "status",
+              "commentary": true
+            }
+          }
+        }
+      }
+    }
+  },
+  "plugins": {
+    "entries": {
+      "parilka-chat": {
+        "enabled": true,
+        "hooks": {
+          "allowConversationAccess": true
+        },
+        "config": {
+          "botUsername": "bichiycepenstotri_bot"
+        }
+      }
+    }
+  }
+}

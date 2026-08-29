@@ -3,10 +3,10 @@ Description=Parilka bounded SQLite maintenance and digest generation
 Documentation=file:%h/repos/parilka-unified/README.md
 Documentation=file:%h/repos/parilka-unified/src/maintenance/README.md
 After=parilka-sync.service parilka-bot.service
-# Weak dependency: the Hermes projection oneshot runs after this unit finishes,
-# even when maintenance itself failed (e.g. a partial digest failure). A failed
-# projection must never fail maintenance, hence Wants, not Requires.
-Wants=parilka-hermes-project.service
+# Weak dependency: the OpenClaw projection oneshot runs after this unit
+# finishes, even when maintenance itself failed. A failed projection must
+# never fail maintenance, hence Wants, not Requires.
+Wants=parilka-openclaw-project.service
 
 [Service]
 Type=oneshot

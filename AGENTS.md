@@ -24,9 +24,10 @@
   slice. Не добавляйте speculative abstractions, compatibility shims,
   DI-container, event bus, Redis/queue/vector service или новый runtime без
   доказанной failure mode.
-- Два long-lived процесса остаются явными: `parilka-sync` владеет одной
-  MTProto session и loopback MCP, `parilka-bot` владеет одним Bot API poller.
-  Они разделяют один versioned SQLite, но не общий процесс.
+- `parilka-sync` владеет одной MTProto session и loopback MCP.
+  Bot API token группы — один poller: штатно OpenClaw agent `parilka` на
+  существующем host gateway. `parilka-bot` не запускать рядом с ним.
+  SQLite общий, process не общий.
 - Storage domains используют один `DatabaseSync` и общий transaction kernel.
   Нельзя открывать соединение на repository, вкладывать транзакции или
   разрывать атомарные bot/outbox/digest/embedding transitions.

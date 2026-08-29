@@ -240,6 +240,11 @@ export function loadConfig(): AppConfig {
         "PARILKA_HERMES_PROJECTION_ENABLED",
       ),
     },
+    openclawProjection: {
+      enabled: boolFromEnv(
+        "PARILKA_OPENCLAW_PROJECTION_ENABLED",
+      ),
+    },
   };
 
   validateConfig(config);

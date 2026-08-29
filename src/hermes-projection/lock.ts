@@ -28,8 +28,8 @@ const FLOCK_BIN = "/usr/bin/flock";
 export function acquireHermesMemoryLock(
   profileHome: string,
   timeoutMs: number,
+  lockPath = join(profileHome, "memories", "MEMORY.md.lock"),
 ): Promise<HermesMemoryLock> {
-  const lockPath = join(profileHome, "memories", "MEMORY.md.lock");
 
   try {
     const lockStat = lstatSync(lockPath);

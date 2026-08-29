@@ -130,4 +130,11 @@ export type AppConfig = {
      */
     enabled: boolean;
   };
+  openclawProjection?: {
+    /**
+     * Kill switch for the OpenClaw workspace projection apply pass. 1/true/yes
+     * enables it; missing/empty/false leaves the workspace untouched.
+     */
+    enabled: boolean;
+  };
 };

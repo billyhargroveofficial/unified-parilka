@@ -12,16 +12,16 @@ const projectSource = readFileSync(
   "utf8",
 );
 
-test("maintain unit weakly wants the projection oneshot", () => {
-  assert.match(
+test("maintain unit no longer wants the Hermes projection oneshot", () => {
+  assert.doesNotMatch(
     maintainSource,
     /^Wants=parilka-hermes-project\.service$/mu,
   );
   for (const strong of ["Requires=", "BindsTo=", "PartOf="]) {
     assert.doesNotMatch(
       maintainSource,
-      new RegExp(`^${strong}`, "mu"),
-      `maintain must not ${strong.trim()} the projection unit`,
+      new RegExp(`^${strong}parilka-hermes-project`, "mu"),
+      `maintain must not ${strong.trim()} the Hermes projection unit`,
     );
   }
 });

@@ -6,8 +6,10 @@ Operator documentation находится вне архитектурного `d
 
 - [Migration and rollback](MIGRATION.md): consistent snapshots, shadow target,
   final target, cutover gates и rollback.
-- [Hermes Agent Profile](HERMES.md): профиль и trusted plugin bridge для
-  Парилка228, установка, cutover, rollback и контракт безопасности.
+- [OpenClaw Agent](OPENCLAW.md): штатный Telegram agent Парилка228 на
+  существующем OpenClaw gateway, trusted plugin, projection, cutover и rollback.
+- [Hermes Agent Profile](HERMES.md): rollback-only profile. Live poller
+  masked; projection с `parilka-maintain` снят.
 - [../README.md](../README.md): local build, config keys, CLI и systemd install.
 
 ## Safety summary
@@ -133,8 +135,8 @@ trust boundary, loopback имеет defensive admission limits: до 32 sessions
 Cache-only read tools (`rag_bm25_search`, `keyword_search`,
 `read_chat_slice`, `day_digest`, `thread_context`) принимают raw MCP
 `source_message_id` как служебное поле исключительно от trusted bridge —
-это не model-facing аргумент. Hermes model-facing plugin скрывает
-его от модели и подставляет свой `HERMES_SESSION_MESSAGE_ID`. Не выводите
+это не model-facing аргумент. OpenClaw plugin `parilka-chat` скрывает
+его от модели и подставляет inbound Telegram message id. Не выводите
 bound клампом к `MAX(message_id)`: в оживлённом чате максимальный id может
 быть новее trigger, и такой кламп утечёт trigger и более новые сообщения.
 Операционные typed-отказы этих пяти инструментов (`cache_error`,

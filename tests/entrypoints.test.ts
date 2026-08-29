@@ -81,6 +81,7 @@ test("every production state wrapper rejects a stale build", () => {
     ["bin/parilka-digests", "dist/digest-cli.js"],
     ["bin/parilka-import-python-state", "dist/python-import-cli.js"],
     ["bin/parilka-maintain", "dist/maintenance-cli.js"],
+    ["bin/parilka-openclaw-project", "dist/openclaw-projection-cli.js"],
   ]);
 
   for (const [wrapper, entrypoint] of wrappers) {

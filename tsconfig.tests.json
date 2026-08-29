@@ -4,5 +4,8 @@
     "rootDir": ".",
     "noEmit": true
   },
-  "include": ["tests/**/*.ts"]
+  "include": [
+    "tests/**/*.ts",
+    "integrations/openclaw/parilka-chat/src/core/**/*.ts"
+  ]
 }

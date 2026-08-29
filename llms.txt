@@ -14,7 +14,11 @@
 
 ## Runtime owners
 
-- `src/bot/`: Bot API ingest, durable turn worker, agent loop и read tools.
+- `src/bot/`: Bot API ingest, durable turn worker, agent loop и read tools
+  (не штатный production poller группы; см. OpenClaw).
+- `integrations/openclaw/`: trusted plugin `parilka-chat` и workspace templates
+  для OpenClaw agent `parilka`.
+- `src/openclaw-projection/`: Dream/lessons/skills → OpenClaw `MEMORY.md`.
 - `src/storage/`: единый SQLite connection/transaction kernel и domain state.
 - `src/sync/`, `src/telegram/`: MTProto ownership, history sync и transports.
 - `src/mcp-tools/`, `src/mcp-loopback.ts`: operator MCP registry и loopback

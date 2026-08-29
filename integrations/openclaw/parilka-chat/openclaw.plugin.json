@@ -1,0 +1,27 @@
+{
+  "id": "parilka-chat",
+  "name": "Parilka Chat",
+  "description": "Trusted cache-read bridge from OpenClaw to parilka-unified loopback MCP.",
+  "contracts": {
+    "tools": [
+      "rag_bm25_search",
+      "keyword_search",
+      "read_chat_slice",
+      "day_digest",
+      "thread_context"
+    ]
+  },
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "botUsername": {
+        "type": "string",
+        "description": "Telegram bot username without @. Literal @mention is required in the group."
+      }
+    }
+  }
+}
