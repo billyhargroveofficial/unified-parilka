@@ -1,10 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { MessageStore } from "../src/store.js";
-import { readMemoryCharLimit } from "../src/hermes-projection/apply.js";
 import {
   planMemoryRender,
   assembleMemoryContent,
@@ -13,31 +9,16 @@ import {
   codepointLength,
   pythonStrip,
   parseMemoryEntries,
-  HERMES_MEMORY_DELIMITER,
+  MEMORY_ENTRY_DELIMITER,
   MANAGED_SEMANTIC_PREFIX,
   MANAGED_FAST_PREFIX,
-} from "../src/hermes-projection/render-memory.js";
-import { captureDreamSnapshot } from "../src/hermes-projection/snapshot.js";
+} from "../src/openclaw-projection/render-memory.js";
+import { captureDreamSnapshot } from "../src/openclaw-projection/snapshot.js";
 import {
   CHAT_ID,
   seedMemory,
   seedFastMemory,
-} from "./support/hermes-projection-helpers.js";
-
-const CONFIG = "memory:\n  memory_char_limit: 8000\n";
-
-function tmpProfile(configYaml: string = CONFIG): {
-  home: string;
-  cleanup(): void;
-} {
-  const dir = mkdtempSync(join(tmpdir(), "parilka-hp-mem-"));
-  mkdirSync(join(dir, "memories"), { recursive: true });
-  writeFileSync(join(dir, "config.yaml"), configYaml, "utf-8");
-  return {
-    home: dir,
-    cleanup: () => rmSync(dir, { recursive: true, force: true }),
-  };
-}
+} from "./support/openclaw-projection-helpers.js";
 
 function tmpStore(): { store: MessageStore; cleanup(): void } {
   const store = new MessageStore(":memory:");
@@ -48,150 +29,11 @@ function tmpStore(): { store: MessageStore; cleanup(): void } {
     kind: "channel",
     isForum: false,
   });
-  return { store, cleanup: () => store.close() };
+  return {
+    store,
+    cleanup: () => store.close(),
+  };
 }
-
-test("readMemoryCharLimit extracts value from config.yaml", () => {
-  const profile = tmpProfile();
-  try {
-    assert.equal(readMemoryCharLimit(profile.home), 8000);
-  } finally {
-    profile.cleanup();
-  }
-});
-
-test("readMemoryCharLimit accepts plain-space tail and comment", () => {
-  const profile = tmpProfile(
-    "memory:\n  memory_char_limit: 8000   \n  memory_enabled: true\n",
-  );
-  try {
-    assert.equal(readMemoryCharLimit(profile.home), 8000);
-  } finally {
-    profile.cleanup();
-  }
-  const commented = tmpProfile(
-    "memory:\n  # limit for consolidated memory\n  memory_char_limit: 9000 # chars\n",
-  );
-  try {
-    assert.equal(readMemoryCharLimit(commented.home), 9000);
-  } finally {
-    commented.cleanup();
-  }
-});
-
-test("readMemoryCharLimit skips sibling scalars and ends at top-level key", () => {
-  const profile = tmpProfile(
-    "memory:\n  enabled: true\n  memory_char_limit: 7000\nother:\n  memory_char_limit: 9999\n",
-  );
-  try {
-    assert.equal(readMemoryCharLimit(profile.home), 7000);
-  } finally {
-    profile.cleanup();
-  }
-});
-
-test("readMemoryCharLimit throws if key missing", () => {
-  const profile = tmpProfile("memory:\n  memory_enabled: true\n");
-  try {
-    assert.throws(() => readMemoryCharLimit(profile.home));
-  } finally {
-    profile.cleanup();
-  }
-});
-
-test("readMemoryCharLimit throws if value < 100", () => {
-  const profile = tmpProfile("memory:\n  memory_char_limit: 50\n");
-  try {
-    assert.throws(() => readMemoryCharLimit(profile.home));
-  } finally {
-    profile.cleanup();
-  }
-});
-
-test("readMemoryCharLimit rejects duplicate scalar", () => {
-  const profile = tmpProfile(
-    "memory:\n  memory_char_limit: 8000\n  memory_char_limit: 9000\n",
-  );
-  try {
-    assert.throws(() => readMemoryCharLimit(profile.home), /[Dd]uplicate/);
-  } finally {
-    profile.cleanup();
-  }
-});
-
-function assertCharLimitRejected(profileHome: string, configYaml: string): void {
-  try {
-    readMemoryCharLimit(profileHome);
-    assert.fail(`expected rejection for config: ${JSON.stringify(configYaml)}`);
-  } catch (error) {
-    if (error instanceof assert.AssertionError) throw error;
-  }
-}
-
-test("readMemoryCharLimit rejects junk suffix and invalid values", () => {
-  for (const configYaml of [
-    "memory:\n  memory_char_limit: 8000x\n",
-    "memory:\n  memory_char_limit: abc\n",
-    'memory:\n  memory_char_limit: "8000"\n',
-    "memory:\n  memory_char_limit: -5\n",
-    "memory:\n  memory_char_limit:\n",
-    "memory:\n  memory_char_limit: 8000#comment\n",
-    "memory:\n  memory_char_limit: 12345678901234567890\n",
-  ]) {
-    const profile = tmpProfile(configYaml);
-    try {
-      assertCharLimitRejected(profile.home, configYaml);
-    } finally {
-      profile.cleanup();
-    }
-  }
-});
-
-test("readMemoryCharLimit rejects tabs anywhere", () => {
-  for (const configYaml of [
-    "memory:\n\tmemory_char_limit: 8000\n",
-    "memory:\n  memory_char_limit:\t8000\n",
-    "memory:\n  memory_char_limit: 8000\t\n",
-  ]) {
-    const profile = tmpProfile(configYaml);
-    try {
-      assertCharLimitRejected(profile.home, configYaml);
-    } finally {
-      profile.cleanup();
-    }
-  }
-});
-
-test("readMemoryCharLimit rejects nested or wrong indentation", () => {
-  for (const configYaml of [
-    "memory:\n    memory_char_limit: 8000\n",
-    "memory:\n   memory_char_limit: 8000\n",
-    "memory:\n memory_char_limit: 8000\n",
-    "memory:\n  x:\n    memory_char_limit: 8000\n",
-  ]) {
-    const profile = tmpProfile(configYaml);
-    try {
-      assertCharLimitRejected(profile.home, configYaml);
-    } finally {
-      profile.cleanup();
-    }
-  }
-});
-
-test("readMemoryCharLimit requires a top-level memory block", () => {
-  for (const configYaml of [
-    "other:\n  memory_char_limit: 8000\n",
-    " memory:\n  memory_char_limit: 8000\n",
-    "memory: true\n",
-  ]) {
-    const profile = tmpProfile(configYaml);
-    try {
-      assertCharLimitRejected(profile.home, configYaml);
-    } finally {
-      profile.cleanup();
-    }
-  }
-});
 
 test("pythonStrip matches Python str.strip set and skips FEFF", () => {
   assert.equal(pythonStrip("  padded  "), "padded");
@@ -230,7 +72,7 @@ test("delimiter is exact \\n§\\n and entries are stripped non-empty", () => {
       "owner1\n§\nowner2",
     );
     assert.deepEqual(plan.ownerEntries, ["owner1", "owner2"]);
-    // Python-style whitespace around entries is stripped by the Hermes parse.
+    // Python-style whitespace around entries is stripped by the entry parser.
     const trimmed = planMemoryRender(
       captureDreamSnapshot(store, CHAT_ID),
       "  padded  \n§\n\nowner",
@@ -372,7 +214,7 @@ test("assemble: maximal newest-first fast prefix, not all or nothing", () => {
     const assembled = assembleMemoryContent(plan, 400)!;
     assert.ok(assembled);
     const fastCount = assembled.content
-      .split(HERMES_MEMORY_DELIMITER)
+      .split(MEMORY_ENTRY_DELIMITER)
       .filter((entry) => entry.startsWith(MANAGED_FAST_PREFIX)).length;
     assert.equal(fastCount, 2);
     assert.equal(assembled.managedEntries, 3);

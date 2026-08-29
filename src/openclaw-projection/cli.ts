@@ -10,7 +10,7 @@ import {
   DEFAULT_MEMORY_CHAR_LIMIT,
   runOpenClawProjectionWithLocks,
 } from "./apply.js";
-import type { ProjectionReport } from "../hermes-projection/types.js";
+import type { ProjectionReport } from "./types.js";
 
 export interface OpenClawProjectionCliOptions {
   apply: boolean;

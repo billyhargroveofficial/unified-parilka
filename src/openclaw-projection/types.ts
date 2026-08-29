@@ -91,6 +91,6 @@ export interface ProjectionOptions {
   lockTimeoutMs: number;
 }
 
-export interface HermesMemoryLock {
+export interface MemoryLock {
   release(): void;
 }

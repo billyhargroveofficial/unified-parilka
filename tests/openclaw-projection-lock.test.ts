@@ -10,22 +10,18 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { acquireHermesMemoryLock } from "../src/hermes-projection/lock.js";
-import type { HermesMemoryLock } from "../src/hermes-projection/types.js";
+import { acquireMemoryLock } from "../src/openclaw-projection/lock.js";
 
 function tmpProfile(): { home: string; cleanup(): void } {
-  const dir = mkdtempSync(join(tmpdir(), "parilka-hp-lock-"));
-  const memoriesDir = join(dir, "memories");
-  mkdirSync(memoriesDir, { recursive: true });
-  // Create the lock file (flock needs the file to exist)
-  writeFileSync(join(memoriesDir, "MEMORY.md.lock"), "", "utf-8");
+  const dir = mkdtempSync(join(tmpdir(), "parilka-oc-lock-"));
+  writeFileSync(join(dir, "MEMORY.md.lock"), "", "utf-8");
   return { home: dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
 test("lock acquires and releases successfully", async () => {
   const profile = tmpProfile();
   try {
-    const lock = await acquireHermesMemoryLock(profile.home, 5000);
+    const lock = await acquireMemoryLock(profile.home, 5000);
     assert.ok(lock);
     assert.equal(typeof lock.release, "function");
     lock.release();
@@ -37,13 +33,13 @@ test("lock acquires and releases successfully", async () => {
 test("second lock acquisition fails while first holds", async () => {
   const profile = tmpProfile();
   try {
-    const lock1 = await acquireHermesMemoryLock(profile.home, 5000);
+    const lock1 = await acquireMemoryLock(profile.home, 5000);
     try {
       // Second lock should timeout or fail quickly
       await assert.rejects(
         async () => {
           // Use a short timeout so test is fast
-          await acquireHermesMemoryLock(profile.home, 2000);
+          await acquireMemoryLock(profile.home, 2000);
         },
         (error: Error) =>
           error.message.includes("timeout") ||
@@ -62,13 +58,13 @@ test("second lock acquisition fails while first holds", async () => {
 test("lock can be re-acquired after release", async () => {
   const profile = tmpProfile();
   try {
-    const lock1 = await acquireHermesMemoryLock(profile.home, 5000);
+    const lock1 = await acquireMemoryLock(profile.home, 5000);
     lock1.release();
 
     // Small delay to ensure the child process is fully gone
     await new Promise((resolve) => setTimeout(resolve, 500));
 
-    const lock2 = await acquireHermesMemoryLock(profile.home, 5000);
+    const lock2 = await acquireMemoryLock(profile.home, 5000);
     assert.ok(lock2);
     lock2.release();
   } finally {
@@ -79,12 +75,12 @@ test("lock can be re-acquired after release", async () => {
 test("lock timeout respected", async () => {
   const profile = tmpProfile();
   try {
-    const lock1 = await acquireHermesMemoryLock(profile.home, 5000);
+    const lock1 = await acquireMemoryLock(profile.home, 5000);
     try {
       const shortTimeout = 500;
       const startMs = Date.now();
       try {
-        await acquireHermesMemoryLock(profile.home, shortTimeout);
+        await acquireMemoryLock(profile.home, shortTimeout);
         assert.fail("Should have thrown");
       } catch (error) {
         const elapsed = Date.now() - startMs;
@@ -113,7 +109,7 @@ test("lock interop: flock process can hold lock across projector", async () => {
         "--no-fork",
         "--timeout",
         "2",
-        join(profile.home, "memories", "MEMORY.md.lock"),
+        join(profile.home, "MEMORY.md.lock"),
         "/bin/sh",
         "-c",
         "printf 'HELD\\n' && sleep 5",
@@ -123,7 +119,7 @@ test("lock interop: flock process can hold lock across projector", async () => {
 
     // The above command held the lock for 5 seconds
     // Now our projector should be able to acquire after
-    const lock = await acquireHermesMemoryLock(profile.home, 5000);
+    const lock = await acquireMemoryLock(profile.home, 5000);
     assert.ok(lock);
     lock.release();
   } finally {
@@ -134,11 +130,9 @@ test("lock interop: flock process can hold lock across projector", async () => {
 test("lock path that is a directory fails closed", async () => {
   const dir = mkdtempSync(join(tmpdir(), "parilka-hp-lockdir-"));
   try {
-    const memoriesDir = join(dir, "memories");
-    mkdirSync(memoriesDir, { recursive: true });
-    mkdirSync(join(memoriesDir, "MEMORY.md.lock"));
+    mkdirSync(join(dir, "MEMORY.md.lock"));
     await assert.rejects(
-      acquireHermesMemoryLock(dir, 5000),
+      acquireMemoryLock(dir, 5000),
       /regular file/,
     );
   } finally {
@@ -149,13 +143,11 @@ test("lock path that is a directory fails closed", async () => {
 test("lock path that is a symlink fails closed", async () => {
   const dir = mkdtempSync(join(tmpdir(), "parilka-hp-locksym-"));
   try {
-    const memoriesDir = join(dir, "memories");
-    mkdirSync(memoriesDir, { recursive: true });
     const target = join(dir, "target.lock");
     writeFileSync(target, "", "utf-8");
-    symlinkSync(target, join(memoriesDir, "MEMORY.md.lock"));
+    symlinkSync(target, join(dir, "MEMORY.md.lock"));
     await assert.rejects(
-      acquireHermesMemoryLock(dir, 5000),
+      acquireMemoryLock(dir, 5000),
       /symlink/,
     );
   } finally {

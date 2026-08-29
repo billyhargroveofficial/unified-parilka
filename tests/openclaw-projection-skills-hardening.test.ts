@@ -12,14 +12,14 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MessageStore } from "../src/store.js";
-import { captureDreamSnapshot } from "../src/hermes-projection/snapshot.js";
-import { applySkills } from "../src/hermes-projection/skills-managed.js";
-import { codepointLength } from "../src/hermes-projection/render-memory.js";
+import { captureDreamSnapshot } from "../src/openclaw-projection/snapshot.js";
+import { applySkills } from "../src/openclaw-projection/skills-managed.js";
+import { codepointLength } from "../src/openclaw-projection/render-memory.js";
 import {
   CHAT_ID,
   seedSkill,
   seedLesson,
-} from "./support/hermes-projection-helpers.js";
+} from "./support/openclaw-projection-helpers.js";
 
 function tmpProfile(): { home: string; cleanup(): void } {
   const dir = mkdtempSync(join(tmpdir(), "parilka-hp-shard-"));

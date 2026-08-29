@@ -7,9 +7,7 @@ Operator documentation находится вне архитектурного `d
 - [Migration and rollback](MIGRATION.md): consistent snapshots, shadow target,
   final target, cutover gates и rollback.
 - [OpenClaw Agent](OPENCLAW.md): штатный Telegram agent Парилка228 на
-  существующем OpenClaw gateway, trusted plugin, projection, cutover и rollback.
-- [Hermes Agent Profile](HERMES.md): rollback-only profile. Live poller
-  masked; projection с `parilka-maintain` снят.
+  существующем OpenClaw gateway, trusted plugin, projection и deploy.
 - [../README.md](../README.md): local build, config keys, CLI и systemd install.
 
 ## Safety summary

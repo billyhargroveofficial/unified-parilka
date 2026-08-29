@@ -9,20 +9,20 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import type { MessageStore } from "../store.js";
-import { acquireHermesMemoryLock } from "../hermes-projection/lock.js";
+import { acquireMemoryLock } from "./lock.js";
 import {
   assembleMemoryContent,
   codepointLength,
   countManagedEntries,
   detectMemoryDrift,
   planMemoryRender,
-} from "../hermes-projection/render-memory.js";
-import { applySkills } from "../hermes-projection/skills-managed.js";
-import { captureDreamSnapshot } from "../hermes-projection/snapshot.js";
+} from "./render-memory.js";
+import { applySkills } from "./skills-managed.js";
+import { captureDreamSnapshot } from "./snapshot.js";
 import type {
-  HermesMemoryLock,
+  MemoryLock,
   ProjectionReport,
-} from "../hermes-projection/types.js";
+} from "./types.js";
 
 export const DEFAULT_MEMORY_CHAR_LIMIT = 8000;
 
@@ -153,9 +153,9 @@ export async function runOpenClawProjectionWithLocks(
   store: MessageStore,
   options: OpenClawProjectionOptions,
 ): Promise<ProjectionReport> {
-  let lock: HermesMemoryLock | undefined;
+  let lock: MemoryLock | undefined;
   try {
-    lock = await acquireHermesMemoryLock(
+    lock = await acquireMemoryLock(
       options.workspace,
       options.lockTimeoutMs,
       join(options.workspace, "MEMORY.md.lock"),

@@ -5,7 +5,7 @@ import type {
   MemoryRenderPlan,
 } from "./types.js";
 
-export const HERMES_MEMORY_DELIMITER = "\n§\n";
+export const MEMORY_ENTRY_DELIMITER = "\n§\n";
 export const MANAGED_SEMANTIC_PREFIX = "[parilka:managed:v1:semantic]";
 export const MANAGED_FAST_PREFIX = "[parilka:managed:v1:fast:";
 
@@ -58,18 +58,18 @@ export function pythonStrip(value: string): string {
 }
 
 /**
- * Exact Hermes MemoryStore parse: split by the delimiter, strip whitespace
- * from each entry, drop empty entries.
+ * Split MEMORY.md by the entry delimiter, strip whitespace from each
+ * entry, drop empty entries.
  */
 export function parseMemoryEntries(raw: string): string[] {
   return raw
-    .split(HERMES_MEMORY_DELIMITER)
+    .split(MEMORY_ENTRY_DELIMITER)
     .map((entry) => pythonStrip(entry))
     .filter((entry) => entry.length > 0);
 }
 
 export function joinMemoryEntries(entries: string[]): string {
-  return entries.join(HERMES_MEMORY_DELIMITER);
+  return entries.join(MEMORY_ENTRY_DELIMITER);
 }
 
 function isManagedEntry(entry: string): boolean {
@@ -80,9 +80,9 @@ function isManagedEntry(entry: string): boolean {
 }
 
 /**
- * Hermes drift detection: the raw content must roundtrip through the entry
- * parse, and no single entry may exceed the full memory_char_limit in
- * codepoints. Returns a reason string when the memory phase must abort.
+ * Drift detection: the raw content must roundtrip through the entry parse,
+ * and no single entry may exceed the full memory_char_limit in codepoints.
+ * Returns a reason string when the memory phase must abort.
  */
 export function detectMemoryDrift(
   raw: string | undefined,
@@ -91,7 +91,7 @@ export function detectMemoryDrift(
   if (raw === undefined) return undefined;
   const entries = parseMemoryEntries(raw);
   if (pythonStrip(raw) !== joinMemoryEntries(entries)) {
-    return "MEMORY.md content does not roundtrip through the Hermes entry parser.";
+    return "MEMORY.md content does not roundtrip through the entry parser.";
   }
   for (const entry of entries) {
     const length = codepointLength(entry);

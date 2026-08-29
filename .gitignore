@@ -4,7 +4,6 @@ dist/
 .env
 .env.*
 !.env.example
-!integrations/hermes/parilka-profile/.env.template
 *.env
 *.env.*
 *.sqlite

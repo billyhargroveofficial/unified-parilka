@@ -172,7 +172,7 @@ test("literal @mention is required; reply-only is not enough", () => {
   assert.equal(hasLiteralBotMention("", "parilka_bot"), false);
 });
 
-test("footer matches the compact Hermes occupancy format", () => {
+test("footer matches the compact occupancy format", () => {
   assert.equal(compactTokens(38100), "38.1k");
   assert.equal(formatElapsed(63), "1м 3с");
   assert.equal(

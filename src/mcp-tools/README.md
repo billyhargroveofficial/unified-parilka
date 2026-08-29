@@ -34,8 +34,8 @@ other tool. Typed operational BotRead failures (`cache_error`,
 `provider_unavailable`, `provider_error`, `timeout`, `aborted`, `unsafe_url`)
 deliberately stay a normal MCP response carrying the `{ok:false, tool,
 error:{code…}, evidence:[]}` envelope (see `jsonCacheReadResult` in
-`response.ts`), so Hermes can act on the structured code instead of an opaque
-protocol error.
+`response.ts`), so the trusted plugin can act on the structured code instead
+of an opaque protocol error.
 
 Every handler receives the MCP request `AbortSignal`. Network-backed chat
 resolution, reply preflight, and send admission check it before and after

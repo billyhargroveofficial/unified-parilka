@@ -13,7 +13,7 @@ import type {
 export const CHAT_ID = "-1003179772905";
 
 export function tmpDb(): { store: MessageStore; dbPath: string; cleanup(): void } {
-  const dir = mkdtempSync(join(tmpdir(), "parilka-hermes-proj-"));
+  const dir = mkdtempSync(join(tmpdir(), "parilka-oc-proj-"));
   const dbPath = join(dir, "messages.sqlite");
   const store = new MessageStore(dbPath);
   store.upsertChat({

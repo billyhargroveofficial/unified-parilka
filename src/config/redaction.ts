@@ -113,9 +113,6 @@ export function redactedConfig(
     },
     throttle: config.throttle,
     memory: config.memory,
-    hermesProjection: config.hermesProjection ?? {
-      enabled: false,
-    },
     openclawProjection: config.openclawProjection ?? {
       enabled: false,
     },

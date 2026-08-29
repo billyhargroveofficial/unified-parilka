@@ -5,9 +5,8 @@ gateway (`openclaw-gateway.service`), агент `parilka`. Trusted plugin
 `integrations/openclaw/parilka-chat/` — model-facing cache tools. Loopback MCP
 остаётся у `parilka-sync` на `127.0.0.1:8766/mcp`.
 
-Hermes profile и `hermes-gateway-parilka.service` — только rollback (unit
-masked, projection больше не стартует с `parilka-maintain`). `parilka-bot.service`
-не включать рядом с OpenClaw: один Bot API token — один poller.
+`parilka-bot.service` не включать рядом с OpenClaw: один Bot API token —
+один poller.
 
 ## Runtime contract
 
@@ -22,7 +21,8 @@ masked, projection больше не стартует с `parilka-maintain`). `p
   (`telegram__*`, `telegram-wife__*`). Сырой MCP 8765/8768 Парилке не светить.
 - Skills allowlist — только `parilka-managed` (lessons + skill ids). Bundled,
   node-hosted и workspace ЗюзАчки не входят.
-- Vision: максимум 6 изображений за ход. Footer как у Hermes.
+- Vision: максимум 6 изображений за ход. Footer
+  `<model> 🧠 · used/max · N tool calls · elapsed`.
 - Memory/skill writes только с `PARILKA_BOT_MEMORY_WRITE_SENDER_IDS`.
   Managed `[parilka:managed:*]` / `parilka-managed` неизменяемы моделью.
 
@@ -30,7 +30,7 @@ masked, projection больше не стартует с `parilka-maintain`). `p
 
 Templates: `integrations/openclaw/parilka-agent/`.
 Live workspace: `~/.openclaw/workspace-parilka`.
-Не копируйте default OpenClaw `MEMORY.md`: projection пишет Hermes-compatible
+Не копируйте default OpenClaw `MEMORY.md`: projection пишет managed
 `MEMORY.md` в корне workspace и `skills/parilka-managed/`.
 
 Kill switch: `PARILKA_OPENCLAW_PROJECTION_ENABLED=true`.
@@ -60,7 +60,7 @@ build. Deny exec/file/browser/computer. Bot username: `bichiycepenstotri_bot`.
 Chat id с префиксом `telegram:` нормализуется. Cache tools —
 `catalogMode: direct-only`.
 
-## Cutover
+## Deploy
 
 1. Offline: `npm run test:openclaw && npm run check && npm run verify`.
 2. `openclaw plugins install --link integrations/openclaw/parilka-chat --force`
@@ -68,13 +68,9 @@ Chat id с префиксом `telegram:` нормализуется. Cache tool
 3. Additive merge `integrations/openclaw/config.fragment.json` в
    `~/.openclaw/openclaw.json`. Token только как env
    `OPENCLAW_TELEGRAM_BOT_TOKEN_PARILKA`. Не печатать значение.
-4. `systemctl --user stop hermes-gateway-parilka.service`
-   затем restart `openclaw-gateway.service`.
-5. Live mention E2E; удалить тестовые сообщения.
+4. Restart `openclaw-gateway.service`.
 
-Rollback: disable telegram account `parilka` / stop его polling, затем
-`systemctl --user unmask hermes-gateway-parilka.service &&
-systemctl --user start hermes-gateway-parilka.service`.
+Чтобы остановить Парилку: disable telegram account `parilka` / stop его polling.
 
 ## Verification
 

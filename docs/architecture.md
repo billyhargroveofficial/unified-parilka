@@ -22,8 +22,7 @@ MTProto ──► parilka-sync ────────────┘
 - Telegram group agent — OpenClaw account/agent `parilka` на существующем
   host gateway. Один Bot API token — один poller. Plugin `parilka-chat`
   вызывает loopback MCP и прячет `source_message_id` от модели.
-- `parilka-bot` и `hermes-gateway-parilka` не являются штатным poller.
-  Hermes-код в репозитории — только rollback; live unit masked.
+- `parilka-bot` не является штатным poller группы.
 - `parilka-sync` и OpenClaw не делят process. SQLite принадлежит Parilka.
 - Общий Telegram MCP rulesync service на `127.0.0.1:8765` — отдельная система
   машины и не является частью Parilka.

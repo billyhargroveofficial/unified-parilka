@@ -67,8 +67,8 @@ chat-scoped fast/long memory и skills применена на startup 2026-07-3
   в `CanonicalBotReadCache` + `BotReadTools`. Сообщения бота маркируются
   `authorRole=assistant` / `isOwnTurn=true`.
 - Trust boundary: raw MCP `source_message_id` — служебное поле только для
-  trusted bridge; текущий Hermes model-facing plugin скрывает его и
-  подставляет `HERMES_SESSION_MESSAGE_ID`. Кламп к `MAX(message_id)` запрещён
+  trusted bridge; OpenClaw plugin `parilka-chat` скрывает его и
+  подставляет inbound Telegram message id. Кламп к `MAX(message_id)` запрещён
   (в оживлённом чате максимум может быть новее trigger). Операционные
   typed-отказы пяти cache tools возвращаются обычным MCP-ответом с
   `{ok:false, tool, error:{code…}, evidence:[]}` без `isError`; `isError`

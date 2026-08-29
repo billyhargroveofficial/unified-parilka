@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { MANAGED_SEMANTIC_PREFIX } from "../src/hermes-projection/render-memory.js";
+import { MANAGED_SEMANTIC_PREFIX } from "../src/openclaw-projection/render-memory.js";
 import {
   parseOpenClawProjectionOptions,
   runOpenClawProjectionCliMain,
@@ -14,7 +14,7 @@ import {
   seedFastMemory,
   seedMemory,
   tmpDb,
-} from "./support/hermes-projection-helpers.js";
+} from "./support/openclaw-projection-helpers.js";
 
 test("parseOptions respects kill switch without requiring workspace", () => {
   const skipped = parseOpenClawProjectionOptions(["--apply"], {});

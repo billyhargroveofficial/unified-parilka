@@ -17,8 +17,8 @@ export function jsonTool(payload: unknown): ToolContent {
  * Typed operational BotRead failures (`cache_error`, `provider_unavailable`,
  * `provider_error`, `timeout`, `aborted`) are the deliberate
  * exception: they stay a normal successful MCP response carrying the
- * `{ok:false, tool, error:{code…}, evidence:[]}` envelope, so Hermes reads a
- * structured error instead of an opaque protocol error.
+ * `{ok:false, tool, error:{code…}, evidence:[]}` envelope, so the trusted
+ * plugin reads a structured error instead of an opaque protocol error.
  */
 export function jsonCacheReadResult(payload: BotReadToolResult): ToolContent {
   if (!payload.ok && isBoundaryFailure(payload)) {

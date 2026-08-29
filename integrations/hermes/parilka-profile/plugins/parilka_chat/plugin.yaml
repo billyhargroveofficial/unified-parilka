@@ -1,9 +1,0 @@
-name: parilka-chat
-version: "1.0.0"
-description: >
-  Trusted plugin bridge from Hermes to parilka-unified loopback MCP.
-  Registers five clean cache-only read tools (parilka_chat toolset),
-  injects chat context on pre_llm_call, and enforces memory/skill write
-  gates on pre_tool_call. Fails closed outside the configured Telegram group.
-hermes_requires: ">=0.20.0"
-kind: standalone

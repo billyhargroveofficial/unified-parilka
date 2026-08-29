@@ -4,8 +4,8 @@ export function normalizeBotUsername(raw: string | undefined): string {
 }
 
 /**
- * Hermes exclusive_bot_mentions: a reply or wake-word is not enough.
- * The body must contain a literal @botusername token.
+ * A reply or wake-word is not enough. The body must contain a literal
+ * @botusername token.
  */
 export function hasLiteralBotMention(text: string | undefined, botUsername: string): boolean {
   const username = normalizeBotUsername(botUsername);
